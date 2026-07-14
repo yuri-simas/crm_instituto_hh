@@ -232,10 +232,19 @@ let storageMode = 'cloud';
 
 function publicUrl(path){ return path ? sb.storage.from('contracts').getPublicUrl(path).data.publicUrl : null; }
 
-async function hashPassword(pw){
-  const enc = new TextEncoder().encode(pw);
-  const buf = await crypto.subtle.digest('SHA-256', enc);
-  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+const AUTH_EMAIL_DOMAIN = 'instituto-hh.local';
+function loginToEmail(login){ return `${login.toLowerCase()}@${AUTH_EMAIL_DOMAIN}`; }
+async function adminUsersFn(payload){
+  const { data: sessionData } = await sb.auth.getSession();
+  const token = sessionData?.session?.access_token;
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/admin-users`, {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json', 'apikey':SUPABASE_ANON_KEY, 'Authorization':`Bearer ${token||SUPABASE_ANON_KEY}` },
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json();
+  if(!res.ok) throw new Error(json.error||'Erro na operação de usuário.');
+  return json;
 }
 
 const LEAD_STATUS = ['Novo','Reunião Agendada','Reunião Realizada','No-show','Fechado','Perdido'];
@@ -326,7 +335,7 @@ async function loadState(){
       courses: coursesR.data.map(rowToCourse),
       paymentMethods: paymentsR.data.map(r=>({id:r.id, name:r.name})),
       closers: closersR.data.map(r=>({id:r.id, name:r.name, commissionPercent:r.commission_percent, acceleratorThreshold:r.accelerator_threshold, acceleratorPercent:r.accelerator_percent})),
-      users: usersR.data.map(r=>({id:r.id, name:r.name, login:r.login, passwordHash:r.password_hash, role:r.role, closerId:r.closer_id||''})),
+      users: usersR.data.map(r=>({id:r.id, name:r.name, login:r.login, authUserId:r.auth_user_id, role:r.role, closerId:r.closer_id||''})),
       leads: leadsR.data.map(r=>({
         id:r.id, name:r.name, phone:r.phone, cityState:r.city_state, education:r.education, semester:r.semester,
         closerId:r.closer_id||'', dateAssigned:r.date_assigned, nextContactDate:r.next_contact_date, status:r.status, notes:r.notes,
@@ -348,15 +357,6 @@ async function loadState(){
     return;
   }
 
-  if(state.users.length===0){
-    const hash = await hashPassword('admin123');
-    const admin = {id:uid(), name:'Administrador', login:'admin', passwordHash:hash, role:'admin', closerId:''};
-    const {error} = await sb.from('users').insert({id:admin.id, name:admin.name, login:admin.login, password_hash:admin.passwordHash, role:admin.role, closer_id:null});
-    if(!error){
-      state.users.push(admin);
-      document.getElementById('login-hint').textContent = 'Primeiro acesso: login "admin" e senha "admin123" — altere depois em Usuários.';
-    }
-  }
   document.getElementById('login-user').focus();
 }
 
@@ -366,23 +366,40 @@ async function attemptLogin(){
   const errEl = document.getElementById('login-error');
   errEl.textContent = '';
   if(!login || !pass){ errEl.textContent = 'Informe login e senha.'; return; }
-  const hash = await hashPassword(pass);
-  const user = state.users.find(u=>u.login.toLowerCase()===login && u.passwordHash===hash);
-  if(!user){ errEl.textContent = 'Login ou senha incorretos.'; return; }
-  currentUser = user;
+  const {error: authErr} = await sb.auth.signInWithPassword({email: loginToEmail(login), password: pass});
+  if(authErr){ errEl.textContent = 'Login ou senha incorretos.'; return; }
+  await loadState();
+  const {data:{user: authUser}} = await sb.auth.getUser();
+  const profile = state.users.find(u=>u.authUserId===authUser.id);
+  if(!profile){ errEl.textContent = 'Usuário autenticado, mas sem perfil no sistema. Fale com o administrador.'; await sb.auth.signOut(); return; }
+  currentUser = profile;
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
   currentTab = 'dashboard';
   render();
 }
 
-function logout(){
+async function logout(){
+  await sb.auth.signOut();
   currentUser = null;
   document.getElementById('app').style.display = 'none';
   document.getElementById('login-screen').style.display = 'flex';
   document.getElementById('login-user').value = '';
   document.getElementById('login-pass').value = '';
   document.getElementById('login-error').textContent = '';
+}
+
+async function tryRestoreSession(){
+  const {data:{session}} = await sb.auth.getSession();
+  if(!session){ document.getElementById('login-user').focus(); return; }
+  await loadState();
+  const profile = state.users.find(u=>u.authUserId===session.user.id);
+  if(!profile){ await sb.auth.signOut(); document.getElementById('login-user').focus(); return; }
+  currentUser = profile;
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  currentTab = 'dashboard';
+  render();
 }
 
 document.addEventListener('keydown', e=>{
@@ -394,7 +411,7 @@ document.addEventListener('keydown', e=>{
 function openMyPasswordModal(){
   document.getElementById('modal').innerHTML = `
     <h3>Alterar minha senha</h3>
-    <div class="field"><label class="field-label">Nova senha</label><input type="password" id="f-newpass" placeholder="Mínimo 4 caracteres"></div>
+    <div class="field"><label class="field-label">Nova senha</label><input type="password" id="f-newpass" placeholder="Mínimo 6 caracteres"></div>
     <div class="field"><label class="field-label">Confirmar nova senha</label><input type="password" id="f-newpass2"></div>
     <div class="modal-actions">
       <button onclick="closeModal()">Cancelar</button>
@@ -406,12 +423,10 @@ function openMyPasswordModal(){
 async function saveMyPassword(){
   const p1 = document.getElementById('f-newpass').value;
   const p2 = document.getElementById('f-newpass2').value;
-  if(p1.length<4){ alert('A senha deve ter pelo menos 4 caracteres.'); return; }
+  if(p1.length<6){ alert('A senha deve ter pelo menos 6 caracteres.'); return; }
   if(p1!==p2){ alert('As senhas não coincidem.'); return; }
-  const passwordHash = await hashPassword(p1);
-  const {error} = await sb.from('users').update({password_hash:passwordHash}).eq('id', currentUser.id);
+  const {error} = await sb.auth.updateUser({password:p1});
   if(error){ alert('Erro ao salvar nova senha: '+error.message); return; }
-  currentUser.passwordHash = passwordHash;
   closeModal();
 }
 
@@ -1162,8 +1177,8 @@ function openUserModal(id){
   document.getElementById('modal').innerHTML = `
     <h3>${editing?'Editar usuário':'Novo usuário'}</h3>
     <div class="field"><label class="field-label">Nome</label><input id="f-name" value="${escapeHtml(u.name)}"></div>
-    <div class="field"><label class="field-label">Login</label><input id="f-login" value="${escapeHtml(u.login)}" placeholder="ex: maria.silva"></div>
-    <div class="field"><label class="field-label">${editing?'Nova senha (deixe em branco para manter)':'Senha'}</label><input type="password" id="f-pass" placeholder="${editing?'••••••••':'Mínimo 4 caracteres'}"></div>
+    <div class="field"><label class="field-label">Login${editing?' (não pode ser alterado)':''}</label><input id="f-login" value="${escapeHtml(u.login)}" placeholder="ex: maria.silva" ${editing?'readonly':''}></div>
+    <div class="field"><label class="field-label">${editing?'Nova senha (deixe em branco para manter)':'Senha'}</label><input type="password" id="f-pass" placeholder="${editing?'••••••••':'Mínimo 6 caracteres'}"></div>
     <div class="field"><label class="field-label">Perfil</label><select id="f-role" onchange="document.getElementById('f-closer-wrap').style.display=this.value==='closer'?'block':'none'"><option value="admin" ${u.role==='admin'?'selected':''}>Administrador</option><option value="closer" ${u.role==='closer'?'selected':''}>Closer</option></select></div>
     <div class="field" id="f-closer-wrap" style="display:${u.role==='closer'?'block':'none'}"><label class="field-label">Closer vinculado</label><select id="f-closer"><option value="">Nenhum</option>${state.closers.map(c=>`<option value="${c.id}" ${u.closerId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div>
     <div class="modal-actions">
@@ -1180,25 +1195,29 @@ async function saveUser(){
   if(!name || !login){ alert('Informe nome e login.'); return; }
   const dupe = state.users.find(u=>u.login.toLowerCase()===login && (!editing || u.id!==editing.id));
   if(dupe){ alert('Já existe um usuário com esse login.'); return; }
-  if(!editing && pass.length<4){ alert('A senha deve ter pelo menos 4 caracteres.'); return; }
+  if(!editing && pass.length<6){ alert('A senha deve ter pelo menos 6 caracteres.'); return; }
+  if(editing && pass && pass.length<6){ alert('A senha deve ter pelo menos 6 caracteres.'); return; }
   const role = document.getElementById('f-role').value;
   const closerId = role==='closer' ? document.getElementById('f-closer').value : '';
-  const data = { id: editing ? editing.id : uid(), name, login, role, closerId };
-  if(pass){ data.passwordHash = await hashPassword(pass); } else if(editing){ data.passwordHash = editing.passwordHash; }
-  const {error} = await sb.from('users').upsert({
-    id:data.id, name:data.name, login:data.login, role:data.role, closer_id:closerId||null, password_hash:data.passwordHash,
-  });
-  if(error){ alert('Erro ao salvar usuário: '+error.message); return; }
-  if(editing){ Object.assign(editing, data); } else { state.users.push(data); }
+  try{
+    if(!editing){
+      await adminUsersFn({action:'create', name, login, password:pass, role, closerId});
+    } else {
+      const {error} = await sb.from('users').update({name, role, closer_id:closerId||null}).eq('id', editing.id);
+      if(error) throw error;
+      if(pass) await adminUsersFn({action:'resetPassword', userId:editing.id, password:pass});
+    }
+  }catch(e){ alert('Erro ao salvar usuário: '+(e.message||e)); return; }
+  await loadState();
   closeModal(); render();
 }
 
 async function deleteUser(id){
   if(currentUser.id===id){ alert('Você não pode excluir o usuário com o qual está logado.'); return; }
   if(!confirm('Tem certeza que deseja excluir este usuário?')) return;
-  const {error} = await sb.from('users').delete().eq('id', id);
-  if(error){ alert('Erro ao excluir usuário: '+error.message); return; }
-  state.users = state.users.filter(u=>u.id!==id);
+  try{ await adminUsersFn({action:'delete', userId:id}); }
+  catch(e){ alert('Erro ao excluir usuário: '+(e.message||e)); return; }
+  await loadState();
   render();
 }
 
@@ -1276,7 +1295,7 @@ async function importBackupFile(input){
     }
     if(parsed.users.length){
       const {error} = await sb.from('users').insert(parsed.users.map(u=>({
-        id:u.id, name:u.name, login:u.login, password_hash:u.passwordHash, role:u.role, closer_id:u.closerId||null,
+        id:u.id, name:u.name, login:u.login, role:u.role, closer_id:u.closerId||null, auth_user_id:u.authUserId||null,
       })));
       if(error) throw error;
     }
@@ -1331,7 +1350,8 @@ async function importBackupFile(input){
   await loadState();
   currentUser = state.users.find(u=>u.id===meBackup.id) || meBackup;
   input.value = '';
-  alert('Backup importado com sucesso.');
+  const semAcesso = state.users.filter(u=>!u.authUserId && u.id!==currentUser.id);
+  alert('Backup importado com sucesso.' + (semAcesso.length ? ` Atenção: ${semAcesso.length} usuário(s) do backup ficaram sem senha de acesso (login antigo não é mais compatível) — recrie o acesso deles em Usuários.` : ''));
   render();
 }
 
@@ -1487,7 +1507,7 @@ function openModal(){ document.getElementById('modal-overlay').classList.add('op
 function closeModal(){ document.getElementById('modal-overlay').classList.remove('open'); editing=null; }
 document.getElementById('modal-overlay').addEventListener('click', e=>{ if(e.target.id==='modal-overlay') closeModal(); });
 
-loadState();
+tryRestoreSession();
 </script>
 </body>
 </html>
