@@ -1,10 +1,12 @@
 -- CRM Instituto HH — migração para login real via Supabase Auth
--- IMPORTANTE: NÃO rode este script ainda. Ele só deve ser executado depois que:
+-- Status: JÁ APLICADO em produção em 2026-07-14 (via `supabase db query --linked`).
+-- Este arquivo fica no repositório como registro / para recriar o setup em outro projeto Supabase do zero.
+-- Se for rodar em um projeto novo, siga esta ordem:
 --   1) a função "admin-users" estiver publicada,
---   2) o usuário admin atual estiver migrado para o Supabase Auth,
---   3) o site (index.html) já estiver com o novo código de login.
--- Rodar antes disso vai travar o acesso de todo mundo (o app ainda usaria a chave anônima).
--- Rode no painel do Supabase: Database > SQL Editor > New query > Run.
+--   2) o usuário admin atual estiver migrado para o Supabase Auth (ação "bootstrap" da função),
+--   3) o site (index.html) já estiver com o novo código de login,
+--   4) só então rode este script (Database > SQL Editor > New query > Run).
+-- Rodar antes disso trava o acesso de todo mundo (o app ainda usaria a chave anônima).
 
 -- 1) Liga cada linha da tabela "users" (perfil) a uma conta real do Supabase Auth
 alter table users add column if not exists auth_user_id uuid unique references auth.users(id) on delete cascade;
@@ -34,8 +36,6 @@ create policy authenticated_all_contracts on storage.objects
   using (bucket_id = 'contracts')
   with check (bucket_id = 'contracts');
 
--- Nota: o bucket "contracts" continua marcado como público (para os links de download
--- funcionarem como hoje). Isso significa que quem tiver o link direto de um contrato específico
--- ainda consegue abri-lo sem login — mas não é mais possível listar ou adivinhar todos os
--- contratos sem estar autenticado. Uma proteção completa (links assinados, com validade) é uma
--- melhoria futura separada.
+-- 5) Bucket de contratos deixa de ser público — download só funciona via link assinado
+--    (gerado pelo próprio app, com validade de 24h), nunca mais por link direto/adivinhado.
+update storage.buckets set public=false where id='contracts';

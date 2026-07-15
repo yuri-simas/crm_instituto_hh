@@ -97,6 +97,24 @@ Deno.serve(async (req) => {
       return json({ ok: true }, 200, cors);
     }
 
+    if (action === 'attachAuth') {
+      // Ativa o acesso de um perfil que existe na tabela "users" mas ainda não tem
+      // login de verdade (ex: usuário restaurado de um backup antigo).
+      const { userId, password } = body;
+      if (!password || password.length < 6) return json({ error: 'Senha muito curta.' }, 400, cors);
+      const { data: profile } = await admin.from('users').select('*').eq('id', userId).single();
+      if (!profile) return json({ error: 'Usuário não encontrado.' }, 404, cors);
+      if (profile.auth_user_id) return json({ error: 'Este usuário já tem acesso configurado.' }, 400, cors);
+      const email = `${profile.login.toLowerCase()}@${EMAIL_DOMAIN}`;
+      const { data: created, error: createErr } = await admin.auth.admin.createUser({
+        email, password, email_confirm: true,
+      });
+      if (createErr) return json({ error: createErr.message }, 400, cors);
+      const { error: linkErr } = await admin.from('users').update({ auth_user_id: created.user.id }).eq('id', userId);
+      if (linkErr) return json({ error: linkErr.message }, 400, cors);
+      return json({ ok: true }, 200, cors);
+    }
+
     if (action === 'delete') {
       const { userId } = body;
       const { data: profile } = await admin.from('users').select('auth_user_id').eq('id', userId).single();

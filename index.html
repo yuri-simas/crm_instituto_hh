@@ -230,7 +230,11 @@ const ROLE_LABEL = {admin:'Administrador', closer:'Closer'};
 
 let storageMode = 'cloud';
 
-function publicUrl(path){ return path ? sb.storage.from('contracts').getPublicUrl(path).data.publicUrl : null; }
+async function publicUrl(path){
+  if(!path) return null;
+  const {data, error} = await sb.storage.from('contracts').createSignedUrl(path, 60*60*24);
+  return error ? null : data.signedUrl;
+}
 
 const AUTH_EMAIL_DOMAIN = 'instituto-hh.local';
 function loginToEmail(login){ return `${login.toLowerCase()}@${AUTH_EMAIL_DOMAIN}`; }
@@ -304,13 +308,13 @@ function defaultState(){
   };
 }
 
-function rowToCourse(r){
+async function rowToCourse(r){
   return { id:r.id, name:r.name, price:r.price,
-    templateFile: r.template_file_path ? {name:r.template_file_name, size:r.template_file_size, path:r.template_file_path, dataUrl:publicUrl(r.template_file_path)} : null };
+    templateFile: r.template_file_path ? {name:r.template_file_name, size:r.template_file_size, path:r.template_file_path, dataUrl:await publicUrl(r.template_file_path)} : null };
 }
-function rowToHistory(h){
+async function rowToHistory(h){
   return { id:h.id, courseId:h.course_id, paymentMethod:h.payment_method, saleId:h.sale_id||undefined, date:h.date,
-    contractFile: h.contract_file_path ? {name:h.contract_file_name, size:h.contract_file_size, path:h.contract_file_path, dataUrl:publicUrl(h.contract_file_path)} : null };
+    contractFile: h.contract_file_path ? {name:h.contract_file_name, size:h.contract_file_size, path:h.contract_file_path, dataUrl:await publicUrl(h.contract_file_path)} : null };
 }
 
 async function loadState(){
@@ -332,7 +336,7 @@ async function loadState(){
     if(firstError) throw firstError.error;
 
     state = {
-      courses: coursesR.data.map(rowToCourse),
+      courses: await Promise.all(coursesR.data.map(rowToCourse)),
       paymentMethods: paymentsR.data.map(r=>({id:r.id, name:r.name})),
       closers: closersR.data.map(r=>({id:r.id, name:r.name, commissionPercent:r.commission_percent, acceleratorThreshold:r.accelerator_threshold, acceleratorPercent:r.accelerator_percent})),
       users: usersR.data.map(r=>({id:r.id, name:r.name, login:r.login, authUserId:r.auth_user_id, role:r.role, closerId:r.closer_id||''})),
@@ -343,10 +347,10 @@ async function loadState(){
       })),
       meetings: meetingsR.data.map(r=>({id:r.id, leadId:r.lead_id, closerId:r.closer_id||'', scheduledDate:r.scheduled_date, status:r.status, notes:r.notes})),
       sales: salesR.data.map(r=>({id:r.id, studentName:r.student_name, leadId:r.lead_id, courseId:r.course_id, closerId:r.closer_id, value:r.value, paymentMethod:r.payment_method, date:r.date})),
-      students: studentsR.data.map(r=>({
+      students: await Promise.all(studentsR.data.map(async r=>({
         id:r.id, name:r.name, phone:r.phone, email:r.email, cpf:r.cpf, professionalRegistration:r.professional_registration, cep:r.cep, address:r.address,
-        courseHistory: historyR.data.filter(h=>h.student_id===r.id).map(rowToHistory),
-      })),
+        courseHistory: await Promise.all(historyR.data.filter(h=>h.student_id===r.id).map(rowToHistory)),
+      }))),
     };
   }catch(e){
     console.error('Falha ao carregar dados do Supabase', e);
@@ -1158,7 +1162,7 @@ function renderUsers(){
           <tr>
             <td style="font-weight:600;color:var(--ink);">${escapeHtml(u.name)}</td>
             <td class="mono">${escapeHtml(u.login)}</td>
-            <td><span class="badge b-fechado">${ROLE_LABEL[u.role]}</span></td>
+            <td><span class="badge b-fechado">${ROLE_LABEL[u.role]}</span> ${!u.authUserId ? '<span class="badge b-perdido" title="Sem senha de acesso configurada">Sem acesso</span>' : ''}</td>
             <td>${u.closerId ? escapeHtml(closerName(u.closerId)) : '—'}</td>
             <td style="text-align:right;white-space:nowrap;">
               <button class="ghost" onclick="openUserModal('${u.id}')">Editar</button>
@@ -1174,11 +1178,13 @@ function renderUsers(){
 function openUserModal(id){
   editing = id ? state.users.find(u=>u.id===id) : null;
   const u = editing || {name:'',login:'',role:'closer',closerId:''};
+  const semAcesso = editing && !editing.authUserId;
   document.getElementById('modal').innerHTML = `
     <h3>${editing?'Editar usuário':'Novo usuário'}</h3>
+    ${semAcesso ? '<div class="pill-note">Este usuário está sem acesso configurado (ex: veio de uma restauração de backup). Defina uma senha para ativar o login dele.</div>' : ''}
     <div class="field"><label class="field-label">Nome</label><input id="f-name" value="${escapeHtml(u.name)}"></div>
     <div class="field"><label class="field-label">Login${editing?' (não pode ser alterado)':''}</label><input id="f-login" value="${escapeHtml(u.login)}" placeholder="ex: maria.silva" ${editing?'readonly':''}></div>
-    <div class="field"><label class="field-label">${editing?'Nova senha (deixe em branco para manter)':'Senha'}</label><input type="password" id="f-pass" placeholder="${editing?'••••••••':'Mínimo 6 caracteres'}"></div>
+    <div class="field"><label class="field-label">${semAcesso ? 'Senha (obrigatória para ativar o acesso)' : editing?'Nova senha (deixe em branco para manter)':'Senha'}</label><input type="password" id="f-pass" placeholder="${editing&&!semAcesso?'••••••••':'Mínimo 6 caracteres'}"></div>
     <div class="field"><label class="field-label">Perfil</label><select id="f-role" onchange="document.getElementById('f-closer-wrap').style.display=this.value==='closer'?'block':'none'"><option value="admin" ${u.role==='admin'?'selected':''}>Administrador</option><option value="closer" ${u.role==='closer'?'selected':''}>Closer</option></select></div>
     <div class="field" id="f-closer-wrap" style="display:${u.role==='closer'?'block':'none'}"><label class="field-label">Closer vinculado</label><select id="f-closer"><option value="">Nenhum</option>${state.closers.map(c=>`<option value="${c.id}" ${u.closerId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div>
     <div class="modal-actions">
@@ -1195,8 +1201,9 @@ async function saveUser(){
   if(!name || !login){ alert('Informe nome e login.'); return; }
   const dupe = state.users.find(u=>u.login.toLowerCase()===login && (!editing || u.id!==editing.id));
   if(dupe){ alert('Já existe um usuário com esse login.'); return; }
-  if(!editing && pass.length<6){ alert('A senha deve ter pelo menos 6 caracteres.'); return; }
-  if(editing && pass && pass.length<6){ alert('A senha deve ter pelo menos 6 caracteres.'); return; }
+  const semAcesso = editing && !editing.authUserId;
+  if((!editing || semAcesso) && pass.length<6){ alert('A senha deve ter pelo menos 6 caracteres.'); return; }
+  if(editing && !semAcesso && pass && pass.length<6){ alert('A senha deve ter pelo menos 6 caracteres.'); return; }
   const role = document.getElementById('f-role').value;
   const closerId = role==='closer' ? document.getElementById('f-closer').value : '';
   try{
@@ -1205,7 +1212,8 @@ async function saveUser(){
     } else {
       const {error} = await sb.from('users').update({name, role, closer_id:closerId||null}).eq('id', editing.id);
       if(error) throw error;
-      if(pass) await adminUsersFn({action:'resetPassword', userId:editing.id, password:pass});
+      if(semAcesso) await adminUsersFn({action:'attachAuth', userId:editing.id, password:pass});
+      else if(pass) await adminUsersFn({action:'resetPassword', userId:editing.id, password:pass});
     }
   }catch(e){ alert('Erro ao salvar usuário: '+(e.message||e)); return; }
   await loadState();
@@ -1431,7 +1439,7 @@ async function uploadCourseTemplate(courseId, input){
   }).eq('id', courseId);
   if(dbErr){ alert('Erro ao salvar referência do arquivo: '+dbErr.message); input.value=''; return; }
   if(oldPath) await sb.storage.from('contracts').remove([oldPath]);
-  course.templateFile = { name:file.name, size:file.size, path, dataUrl:publicUrl(path) };
+  course.templateFile = { name:file.name, size:file.size, path, dataUrl:await publicUrl(path) };
   render();
 }
 
@@ -1464,7 +1472,7 @@ async function uploadContractFor(studentId, chId, input){
   }).eq('id', chId);
   if(dbErr){ alert('Erro ao salvar referência do arquivo: '+dbErr.message); input.value=''; return; }
   if(oldPath) await sb.storage.from('contracts').remove([oldPath]);
-  ch.contractFile = { name:file.name, size:file.size, path, dataUrl:publicUrl(path) };
+  ch.contractFile = { name:file.name, size:file.size, path, dataUrl:await publicUrl(path) };
   render();
 }
 
