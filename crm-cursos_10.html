@@ -496,6 +496,12 @@ function leadEducationOptions(){
   });
   return Array.from(seen.values()).sort((a,b)=>a.localeCompare(b,'pt-BR'));
 }
+function onEducationSelectChange(){
+  const sel = document.getElementById('f-education');
+  const newInput = document.getElementById('f-education-new');
+  if(sel.value==='__new__'){ newInput.style.display='block'; newInput.value=''; newInput.focus(); }
+  else { newInput.style.display='none'; newInput.value=''; }
+}
 function filteredMeetings(){ let m = courseFilter==='all' ? state.meetings : state.meetings.filter(m=>leadCourseIds(m.leadId).includes(courseFilter)); return scopeByRole(m); }
 function filteredSales(){ let s = courseFilter==='all' ? state.sales : state.sales.filter(s=>s.courseId===courseFilter); return scopeByRole(s); }
 function filteredStudents(){ return courseFilter==='all' ? state.students : state.students.filter(s=>(s.courseHistory||[]).some(ch=>ch.courseId===courseFilter)); }
@@ -774,7 +780,14 @@ function openLeadModal(id){
     <div class="field"><label class="field-label">Nome</label><input id="f-name" value="${escapeHtml(l.name)}" placeholder="Nome do lead"></div>
     <div class="field"><label class="field-label">Telefone</label><input id="f-phone" value="${escapeHtml(l.phone)}"></div>
     <div class="field"><label class="field-label">Cidade/UF</label><input id="f-citystate" value="${escapeHtml(l.cityState||'')}" placeholder="ex: Porto Alegre/RS"></div>
-    <div class="field"><label class="field-label">Formação</label><input id="f-education" list="education-datalist" value="${escapeHtml(l.education||'')}" placeholder="ex: Enfermagem"><datalist id="education-datalist">${leadEducationOptions().map(p=>`<option value="${escapeHtml(p)}">`).join('')}</datalist></div>
+    <div class="field"><label class="field-label">Formação</label>
+      <select id="f-education" onchange="onEducationSelectChange()">
+        <option value="">Selecione...</option>
+        ${leadEducationOptions().map(p=>`<option value="${escapeHtml(p)}" ${l.education===p?'selected':''}>${escapeHtml(p)}</option>`).join('')}
+        <option value="__new__" ${l.education && !leadEducationOptions().includes(l.education) ? 'selected' : ''}>+ Adicionar nova profissão...</option>
+      </select>
+      <input id="f-education-new" value="${!leadEducationOptions().includes(l.education||'') ? escapeHtml(l.education||'') : ''}" placeholder="Digite a nova profissão" style="margin-top:6px;display:${l.education && !leadEducationOptions().includes(l.education) ? 'block' : 'none'}">
+    </div>
     <div class="field"><label class="field-label">Semestre (se estudante)</label><input id="f-semester" value="${escapeHtml(l.semester||'')}" placeholder="ex: 6"></div>
     <div class="field"><label class="field-label">Curso(s) de interesse</label>
       <div class="checkgrid" id="f-course-interest">
@@ -796,12 +809,15 @@ function openLeadModal(id){
 async function saveLead(){
   const name = document.getElementById('f-name').value.trim();
   if(!name){ alert('Informe o nome do lead.'); return; }
+  const educationSel = document.getElementById('f-education').value;
+  const education = educationSel==='__new__' ? document.getElementById('f-education-new').value.trim() : educationSel;
+  if(educationSel==='__new__' && !education){ alert('Digite a nova profissão ou selecione uma da lista.'); return; }
   const courseIds = Array.from(document.querySelectorAll('#f-course-interest .checkpill.on')).map(el=>el.dataset.id);
   const data = {
     id: editing ? editing.id : uid(),
     name, phone: document.getElementById('f-phone').value.trim(),
     cityState: document.getElementById('f-citystate').value.trim(),
-    education: document.getElementById('f-education').value.trim(),
+    education,
     semester: document.getElementById('f-semester').value.trim(),
     courseIds,
     closerId: document.getElementById('f-closer').value,
