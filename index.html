@@ -209,6 +209,7 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 let state = null;
 let currentTab = 'dashboard';
 let courseFilter = 'all';
+let leadNameFilter = '';
 let editing = null;
 const MAX_CONTRACT_BYTES = 1.5 * 1024 * 1024;
 let currentUser = null;
@@ -471,7 +472,30 @@ function scopeByRole(list){
   }
   return list;
 }
-function filteredLeads(){ let l = courseFilter==='all' ? state.leads : state.leads.filter(l=>(l.courseIds||[]).includes(courseFilter)); return scopeByRole(l); }
+function filteredLeads(){
+  let l = courseFilter==='all' ? state.leads : state.leads.filter(l=>(l.courseIds||[]).includes(courseFilter));
+  if(leadNameFilter.trim()){
+    const q = leadNameFilter.trim().toLowerCase();
+    l = l.filter(x=>x.name.toLowerCase().includes(q));
+  }
+  return scopeByRole(l);
+}
+function setLeadNameFilter(v){
+  leadNameFilter = v;
+  const el = document.getElementById('lead-name-filter');
+  const pos = el ? el.selectionStart : null;
+  render();
+  const el2 = document.getElementById('lead-name-filter');
+  if(el2){ el2.focus(); if(pos!=null) el2.setSelectionRange(pos,pos); }
+}
+function leadEducationOptions(){
+  const seen = new Map();
+  state.leads.forEach(l=>{
+    const v = (l.education||'').trim();
+    if(v && !seen.has(v.toLowerCase())) seen.set(v.toLowerCase(), v);
+  });
+  return Array.from(seen.values()).sort((a,b)=>a.localeCompare(b,'pt-BR'));
+}
 function filteredMeetings(){ let m = courseFilter==='all' ? state.meetings : state.meetings.filter(m=>leadCourseIds(m.leadId).includes(courseFilter)); return scopeByRole(m); }
 function filteredSales(){ let s = courseFilter==='all' ? state.sales : state.sales.filter(s=>s.courseId===courseFilter); return scopeByRole(s); }
 function filteredStudents(){ return courseFilter==='all' ? state.students : state.students.filter(s=>(s.courseHistory||[]).some(ch=>ch.courseId===courseFilter)); }
@@ -713,6 +737,10 @@ function renderLeads(){
   const rows = filteredLeads();
   return `
     ${toolbarHtml('Leads','Novo lead','openLeadModal()')}
+    <div class="filterbar" style="margin-bottom:12px;">
+      <label for="lead-name-filter">Buscar por nome</label>
+      <input id="lead-name-filter" value="${escapeHtml(leadNameFilter)}" oninput="setLeadNameFilter(this.value)" placeholder="Digite o nome do lead...">
+    </div>
     <div class="card">
       <table>
         <thead><tr><th>Lead</th><th>Cidade/UF</th><th>Formação</th><th>Cursos de interesse</th><th>1º atendimento</th><th>Responsável</th><th>Próximo contato</th><th>Status</th><th></th></tr></thead>
@@ -731,7 +759,7 @@ function renderLeads(){
               <button class="ghost" onclick="openLeadModal('${l.id}')">Editar</button>
               <button class="danger-ghost" onclick="deleteItem('leads','${l.id}')">Excluir</button>
             </td>
-          </tr>`).join('') : `<tr class="empty-row"><td colspan="9">Nenhum lead repassado ainda.</td></tr>`}
+          </tr>`).join('') : `<tr class="empty-row"><td colspan="9">${leadNameFilter.trim() ? 'Nenhum lead encontrado com esse nome.' : 'Nenhum lead repassado ainda.'}</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -746,7 +774,7 @@ function openLeadModal(id){
     <div class="field"><label class="field-label">Nome</label><input id="f-name" value="${escapeHtml(l.name)}" placeholder="Nome do lead"></div>
     <div class="field"><label class="field-label">Telefone</label><input id="f-phone" value="${escapeHtml(l.phone)}"></div>
     <div class="field"><label class="field-label">Cidade/UF</label><input id="f-citystate" value="${escapeHtml(l.cityState||'')}" placeholder="ex: Porto Alegre/RS"></div>
-    <div class="field"><label class="field-label">Formação</label><input id="f-education" value="${escapeHtml(l.education||'')}" placeholder="ex: Enfermagem"></div>
+    <div class="field"><label class="field-label">Formação</label><input id="f-education" list="education-datalist" value="${escapeHtml(l.education||'')}" placeholder="ex: Enfermagem"><datalist id="education-datalist">${leadEducationOptions().map(p=>`<option value="${escapeHtml(p)}">`).join('')}</datalist></div>
     <div class="field"><label class="field-label">Semestre (se estudante)</label><input id="f-semester" value="${escapeHtml(l.semester||'')}" placeholder="ex: 6"></div>
     <div class="field"><label class="field-label">Curso(s) de interesse</label>
       <div class="checkgrid" id="f-course-interest">
