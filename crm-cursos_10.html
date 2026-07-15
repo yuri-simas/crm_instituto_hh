@@ -336,6 +336,8 @@ async function loadState(){
     const firstError = results.find(r=>r.error);
     if(firstError) throw firstError.error;
 
+    storageMode = 'cloud';
+    document.getElementById('login-hint').textContent = '';
     state = {
       courses: await Promise.all(coursesR.data.map(rowToCourse)),
       paymentMethods: paymentsR.data.map(r=>({id:r.id, name:r.name})),
