@@ -115,6 +115,29 @@ tbody tr:last-child td{border-bottom:none;}
 .bar-fill{height:100%;background:var(--gold);border-radius:6px;}
 .bar-val{width:90px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-soft);flex-shrink:0;}
 
+/* view toggle */
+.view-toggle{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;flex-shrink:0;}
+.view-toggle button{border:none;border-radius:0;padding:7px 12px;background:#fff;font-size:12.5px;font-weight:600;color:var(--ink-soft);}
+.view-toggle button:hover{background:var(--bg);color:var(--ink);}
+.view-toggle button.active{background:var(--ink);color:#fff;}
+
+/* kanban */
+.kanban-board{display:flex;gap:14px;overflow-x:auto;padding-bottom:8px;align-items:flex-start;}
+.kanban-col{background:var(--surface);border:1px solid var(--border);border-radius:12px;min-width:250px;max-width:270px;flex:1 0 250px;display:flex;flex-direction:column;max-height:calc(100vh - 220px);}
+.kanban-col-head{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;font-size:12.5px;font-weight:600;color:var(--ink-2);position:sticky;top:0;background:var(--surface);border-radius:12px 12px 0 0;z-index:1;}
+.kanban-col-head .count{font-family:'IBM Plex Mono',monospace;font-weight:500;color:var(--ink-soft);background:var(--bg);border-radius:20px;padding:1px 8px;font-size:11px;}
+.kanban-col-body{padding:10px;flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;min-height:70px;transition:background .1s;}
+.kanban-col-body.drag-over{background:var(--teal-bg);}
+.kanban-card{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;cursor:grab;font-size:12.5px;color:var(--ink-2);}
+.kanban-card:hover{border-color:var(--ink-soft);}
+.kanban-card:active{cursor:grabbing;}
+.kanban-card.dragging{opacity:.35;}
+.kanban-card .k-name{font-weight:600;color:var(--ink);font-size:13px;margin-bottom:3px;}
+.kanban-card .k-meta{color:var(--ink-soft);font-size:11.5px;margin-top:3px;}
+.kanban-card .k-courses{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;}
+.kanban-card .k-courses .badge{font-size:10px;padding:2px 7px;}
+.kanban-empty{text-align:center;color:var(--ink-soft);font-size:11.5px;padding:14px 6px;}
+
 /* modal */
 #modal-overlay{position:fixed;inset:0;background:rgba(30,42,74,.4);display:none;align-items:center;justify-content:center;z-index:50;padding:20px;}
 #modal-overlay.open{display:flex;}
@@ -210,6 +233,8 @@ let state = null;
 let currentTab = 'dashboard';
 let courseFilter = 'all';
 let leadNameFilter = '';
+let leadsView = 'kanban';
+let draggedLeadId = null;
 let editing = null;
 const MAX_CONTRACT_BYTES = 1.5 * 1024 * 1024;
 let currentUser = null;
@@ -745,10 +770,22 @@ function renderLeads(){
   const rows = filteredLeads();
   return `
     ${toolbarHtml('Leads','Novo lead','openLeadModal()')}
-    <div class="filterbar" style="margin-bottom:12px;">
-      <label for="lead-name-filter">Buscar por nome</label>
-      <input id="lead-name-filter" value="${escapeHtml(leadNameFilter)}" oninput="setLeadNameFilter(this.value)" placeholder="Digite o nome do lead...">
+    <div class="filterbar" style="margin-bottom:12px;justify-content:space-between;">
+      <div class="filterbar">
+        <label for="lead-name-filter">Buscar por nome</label>
+        <input id="lead-name-filter" value="${escapeHtml(leadNameFilter)}" oninput="setLeadNameFilter(this.value)" placeholder="Digite o nome do lead...">
+      </div>
+      <div class="view-toggle">
+        <button type="button" class="${leadsView==='kanban'?'active':''}" onclick="setLeadsView('kanban')">Kanban</button>
+        <button type="button" class="${leadsView==='list'?'active':''}" onclick="setLeadsView('list')">Lista</button>
+      </div>
     </div>
+    ${leadsView==='kanban' ? renderLeadsKanban(rows) : renderLeadsListTable(rows)}
+  `;
+}
+
+function renderLeadsListTable(rows){
+  return `
     <div class="card">
       <table>
         <thead><tr><th>Lead</th><th>Cidade/UF</th><th>Formação</th><th>Cursos de interesse</th><th>1º atendimento</th><th>Responsável</th><th>Próximo contato</th><th>Status</th><th></th></tr></thead>
@@ -772,6 +809,69 @@ function renderLeads(){
       </table>
     </div>
   `;
+}
+
+function renderLeadsKanban(rows){
+  return `<div class="kanban-board">
+    ${LEAD_STATUS.map(status=>{
+      const items = rows.filter(l=>l.status===status);
+      return `
+      <div class="kanban-col">
+        <div class="kanban-col-head"><span>${status}</span><span class="count mono">${items.length}</span></div>
+        <div class="kanban-col-body" ondragover="leadDragOver(event)" ondragleave="leadDragLeave(event)" ondrop="leadDrop(event,'${status}')">
+          ${items.length ? items.map(l=>`
+            <div class="kanban-card" draggable="true" ondragstart="leadDragStart(event,'${l.id}')" ondragend="leadDragEnd(event)" onclick="openLeadModal('${l.id}')" title="Arraste para mudar de etapa · clique para editar">
+              <div class="k-name">${escapeHtml(l.name)}</div>
+              <div class="k-meta mono">${escapeHtml(l.phone||'—')}</div>
+              <div class="k-meta">${escapeHtml(closerName(l.closerId))}${l.nextContactDate?` · próx: ${fmtDate(l.nextContactDate)}`:''}</div>
+              ${(l.courseIds||[]).length ? `<div class="k-courses">${(l.courseIds||[]).map(cid=>`<span class="badge b-fechado">${escapeHtml(courseName(cid))}</span>`).join('')}</div>` : ''}
+            </div>
+          `).join('') : `<div class="kanban-empty">Nenhum lead</div>`}
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function setLeadsView(v){ leadsView = v; render(); }
+
+function leadDragStart(ev, id){
+  draggedLeadId = id;
+  ev.dataTransfer.effectAllowed = 'move';
+  ev.dataTransfer.setData('text/plain', id);
+  ev.target.classList.add('dragging');
+}
+function leadDragEnd(ev){
+  ev.target.classList.remove('dragging');
+  document.querySelectorAll('.kanban-col-body.drag-over').forEach(el=>el.classList.remove('drag-over'));
+}
+function leadDragOver(ev){
+  ev.preventDefault();
+  ev.currentTarget.classList.add('drag-over');
+}
+function leadDragLeave(ev){
+  ev.currentTarget.classList.remove('drag-over');
+}
+async function leadDrop(ev, status){
+  ev.preventDefault();
+  ev.currentTarget.classList.remove('drag-over');
+  const id = draggedLeadId || ev.dataTransfer.getData('text/plain');
+  draggedLeadId = null;
+  if(!id) return;
+  await moveLeadStatus(id, status);
+}
+async function moveLeadStatus(id, status){
+  const lead = state.leads.find(l=>l.id===id);
+  if(!lead || lead.status===status) return;
+  const prevStatus = lead.status;
+  lead.status = status;
+  render();
+  const {error} = await sb.from('leads').update({status}).eq('id', id);
+  if(error){
+    lead.status = prevStatus;
+    render();
+    alert('Erro ao mover lead: '+error.message);
+  }
 }
 
 function openLeadModal(id){
