@@ -821,7 +821,7 @@ function renderLeadsKanban(rows){
         <div class="kanban-col-head"><span>${status}</span><span class="count mono">${items.length}</span></div>
         <div class="kanban-col-body" ondragover="leadDragOver(event)" ondragleave="leadDragLeave(event)" ondrop="leadDrop(event,'${status}')">
           ${items.length ? items.map(l=>`
-            <div class="kanban-card" draggable="true" ondragstart="leadDragStart(event,'${l.id}')" ondragend="leadDragEnd(event,'${l.id}')" title="Arraste para mudar de etapa · clique para editar">
+            <div class="kanban-card" draggable="true" ondragstart="leadDragStart(event,'${l.id}')" ondragend="leadDragEnd(event,'${l.id}')" onclick="openLeadModal('${l.id}')" title="Arraste para mudar de etapa · clique para editar">
               <div class="k-name">${escapeHtml(l.name)}</div>
               <div class="k-meta mono">${escapeHtml(l.phone||'—')}</div>
               <div class="k-meta">${escapeHtml(closerName(l.closerId))}${l.nextContactDate?` · próx: ${fmtDate(l.nextContactDate)}`:''}</div>
