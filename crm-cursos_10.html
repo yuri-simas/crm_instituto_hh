@@ -235,6 +235,7 @@ let courseFilter = 'all';
 let leadNameFilter = '';
 let leadsView = 'kanban';
 let draggedLeadId = null;
+let dragStartX = 0, dragStartY = 0;
 let editing = null;
 const MAX_CONTRACT_BYTES = 1.5 * 1024 * 1024;
 let currentUser = null;
@@ -820,7 +821,7 @@ function renderLeadsKanban(rows){
         <div class="kanban-col-head"><span>${status}</span><span class="count mono">${items.length}</span></div>
         <div class="kanban-col-body" ondragover="leadDragOver(event)" ondragleave="leadDragLeave(event)" ondrop="leadDrop(event,'${status}')">
           ${items.length ? items.map(l=>`
-            <div class="kanban-card" draggable="true" ondragstart="leadDragStart(event,'${l.id}')" ondragend="leadDragEnd(event)" onclick="openLeadModal('${l.id}')" title="Arraste para mudar de etapa · clique para editar">
+            <div class="kanban-card" draggable="true" ondragstart="leadDragStart(event,'${l.id}')" ondragend="leadDragEnd(event,'${l.id}')" title="Arraste para mudar de etapa · clique para editar">
               <div class="k-name">${escapeHtml(l.name)}</div>
               <div class="k-meta mono">${escapeHtml(l.phone||'—')}</div>
               <div class="k-meta">${escapeHtml(closerName(l.closerId))}${l.nextContactDate?` · próx: ${fmtDate(l.nextContactDate)}`:''}</div>
@@ -837,13 +838,17 @@ function setLeadsView(v){ leadsView = v; render(); }
 
 function leadDragStart(ev, id){
   draggedLeadId = id;
+  dragStartX = ev.clientX;
+  dragStartY = ev.clientY;
   ev.dataTransfer.effectAllowed = 'move';
   ev.dataTransfer.setData('text/plain', id);
   ev.target.classList.add('dragging');
 }
-function leadDragEnd(ev){
+function leadDragEnd(ev, id){
   ev.target.classList.remove('dragging');
   document.querySelectorAll('.kanban-col-body.drag-over').forEach(el=>el.classList.remove('drag-over'));
+  const movedDistance = Math.hypot((ev.clientX||0)-dragStartX, (ev.clientY||0)-dragStartY);
+  if(movedDistance < 6) openLeadModal(id);
 }
 function leadDragOver(ev){
   ev.preventDefault();
