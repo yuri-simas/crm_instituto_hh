@@ -907,10 +907,16 @@ function openLeadModal(id){
     <div class="field"><label class="field-label">Status</label><select id="f-status">${LEAD_STATUS.map(s=>`<option ${l.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
     <div class="field"><label class="field-label">Observações</label><textarea id="f-notes" rows="3" placeholder="Anotações sobre o atendimento">${escapeHtml(l.notes||'')}</textarea></div>
     <div class="modal-actions">
+      ${editing ? `<button class="danger-ghost" style="margin-right:auto;" onclick="deleteLeadFromModal('${editing.id}')">Excluir</button>` : ''}
       <button onclick="closeModal()">Cancelar</button>
       <button class="primary" onclick="saveLead()">Salvar</button>
     </div>`;
   openModal();
+}
+
+async function deleteLeadFromModal(id){
+  await deleteItem('leads', id);
+  if(!state.leads.find(l=>l.id===id)) closeModal();
 }
 
 async function saveLead(){
