@@ -235,7 +235,6 @@ let courseFilter = 'all';
 let leadNameFilter = '';
 let leadsView = 'kanban';
 let draggedLeadId = null;
-let dragStartX = 0, dragStartY = 0;
 let editing = null;
 const MAX_CONTRACT_BYTES = 1.5 * 1024 * 1024;
 let currentUser = null;
@@ -836,10 +835,10 @@ function renderLeadsKanban(rows){
 
 function setLeadsView(v){ leadsView = v; render(); }
 
+let leadStatusChanged = false;
 function leadDragStart(ev, id){
   draggedLeadId = id;
-  dragStartX = ev.clientX;
-  dragStartY = ev.clientY;
+  leadStatusChanged = false;
   ev.dataTransfer.effectAllowed = 'move';
   ev.dataTransfer.setData('text/plain', id);
   ev.target.classList.add('dragging');
@@ -847,8 +846,8 @@ function leadDragStart(ev, id){
 function leadDragEnd(ev, id){
   ev.target.classList.remove('dragging');
   document.querySelectorAll('.kanban-col-body.drag-over').forEach(el=>el.classList.remove('drag-over'));
-  const movedDistance = Math.hypot((ev.clientX||0)-dragStartX, (ev.clientY||0)-dragStartY);
-  if(movedDistance < 6) openLeadModal(id);
+  if(!leadStatusChanged) openLeadModal(id);
+  leadStatusChanged = false;
 }
 function leadDragOver(ev){
   ev.preventDefault();
@@ -868,6 +867,7 @@ async function leadDrop(ev, status){
 async function moveLeadStatus(id, status){
   const lead = state.leads.find(l=>l.id===id);
   if(!lead || lead.status===status) return;
+  leadStatusChanged = true;
   const prevStatus = lead.status;
   lead.status = status;
   render();
