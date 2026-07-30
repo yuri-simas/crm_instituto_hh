@@ -1671,8 +1671,8 @@ async function deleteItem(collection, id){
 function openModal(){ document.getElementById('modal-overlay').classList.add('open'); }
 function closeModal(){ document.getElementById('modal-overlay').classList.remove('open'); editing=null; }
 let overlayMouseDownOnBackdrop = false;
-document.getElementById('modal-overlay').addEventListener('mousedown', e=>{ overlayMouseDownOnBackdrop = (e.target.id==='modal-overlay'); console.log('[DEBUG mousedown]', e.target.id, '-> flag=', overlayMouseDownOnBackdrop); });
-document.getElementById('modal-overlay').addEventListener('click', e=>{ console.log('[DEBUG click]', e.target.id, 'flag=', overlayMouseDownOnBackdrop); if(e.target.id==='modal-overlay' && overlayMouseDownOnBackdrop) closeModal(); });
+document.getElementById('modal-overlay').addEventListener('mousedown', e=>{ overlayMouseDownOnBackdrop = (e.target.id==='modal-overlay'); });
+document.getElementById('modal-overlay').addEventListener('click', e=>{ if(e.target.id==='modal-overlay' && overlayMouseDownOnBackdrop) closeModal(); });
 
 tryRestoreSession();
 </script>
