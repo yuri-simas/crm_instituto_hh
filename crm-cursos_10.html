@@ -1670,7 +1670,9 @@ async function deleteItem(collection, id){
 
 function openModal(){ document.getElementById('modal-overlay').classList.add('open'); }
 function closeModal(){ document.getElementById('modal-overlay').classList.remove('open'); editing=null; }
-document.getElementById('modal-overlay').addEventListener('click', e=>{ if(e.target.id==='modal-overlay') closeModal(); });
+let overlayMouseDownOnBackdrop = false;
+document.getElementById('modal-overlay').addEventListener('mousedown', e=>{ overlayMouseDownOnBackdrop = (e.target.id==='modal-overlay'); });
+document.getElementById('modal-overlay').addEventListener('click', e=>{ if(e.target.id==='modal-overlay' && overlayMouseDownOnBackdrop) closeModal(); });
 
 tryRestoreSession();
 </script>
