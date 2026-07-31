@@ -939,11 +939,16 @@ async function saveLead(){
     status: document.getElementById('f-status').value,
     notes: document.getElementById('f-notes').value.trim(),
   };
-  const {error: leadErr} = await sb.from('leads').upsert({
+  const leadRow = {
     id:data.id, name:data.name, phone:data.phone, city_state:data.cityState, education:data.education,
     semester:data.semester, closer_id:data.closerId||null, date_assigned:data.dateAssigned||null,
     next_contact_date:data.nextContactDate||null, status:data.status, notes:data.notes,
-  });
+  };
+  let {error: leadErr} = await sb.from('leads').upsert(leadRow);
+  if(leadErr && isSessionExpiredError(leadErr)){
+    if(!(await handleExpiredSession())) return;
+    ({error: leadErr} = await sb.from('leads').upsert(leadRow));
+  }
   if(leadErr){ alert('Erro ao salvar lead: '+leadErr.message); return; }
   await sb.from('lead_courses').delete().eq('lead_id', data.id);
   if(courseIds.length){
@@ -1673,6 +1678,25 @@ function closeModal(){ document.getElementById('modal-overlay').classList.remove
 let overlayMouseDownOnBackdrop = false;
 document.getElementById('modal-overlay').addEventListener('mousedown', e=>{ overlayMouseDownOnBackdrop = (e.target.id==='modal-overlay'); });
 document.getElementById('modal-overlay').addEventListener('click', e=>{ if(e.target.id==='modal-overlay' && overlayMouseDownOnBackdrop) closeModal(); });
+
+function isSessionExpiredError(error){
+  return !!error && /row-level security|JWT|expired/i.test(error.message||'');
+}
+async function handleExpiredSession(){
+  const {data:{session}} = await sb.auth.refreshSession();
+  if(!session){
+    alert('Sua sessão expirou. Faça login novamente para continuar.');
+    await logout();
+    return false;
+  }
+  return true;
+}
+document.addEventListener('visibilitychange', async ()=>{
+  if(document.visibilityState==='visible' && currentUser){
+    const {data:{session}} = await sb.auth.getSession();
+    if(!session){ alert('Sua sessão expirou. Faça login novamente para continuar.'); await logout(); }
+  }
+});
 
 tryRestoreSession();
 </script>
