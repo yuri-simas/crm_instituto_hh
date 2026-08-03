@@ -88,6 +88,7 @@ tbody tr:last-child td{border-bottom:none;}
 .b-fechado{background:var(--gold-bg);color:var(--gold);}
 .b-perdido{background:#F0F0F0;color:#888;}
 .b-cancelada{background:#F0F0F0;color:#888;}
+.b-followup{background:#FDEFD9;color:#B7791F;}
 
 /* metric cards */
 .grid-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:22px;}
@@ -277,11 +278,11 @@ async function adminUsersFn(payload){
   return json;
 }
 
-const LEAD_STATUS = ['Novo','Reunião Agendada','Reunião Realizada','No-show','Fechado','Perdido'];
+const LEAD_STATUS = ['Novo','Reunião Agendada','Reunião Realizada','Follow up','No-show','Fechado','Perdido'];
 const MEETING_STATUS = ['Agendada','Realizada','No-show','Cancelada'];
 const badgeClass = s => ({
   'Novo':'b-novo','Reunião Agendada':'b-agendada','Reunião Realizada':'b-realizada',
-  'No-show':'b-noshow','Fechado':'b-fechado','Perdido':'b-perdido',
+  'Follow up':'b-followup','No-show':'b-noshow','Fechado':'b-fechado','Perdido':'b-perdido',
   'Agendada':'b-agendada','Realizada':'b-realizada','Cancelada':'b-cancelada'
 }[s] || 'b-novo');
 
