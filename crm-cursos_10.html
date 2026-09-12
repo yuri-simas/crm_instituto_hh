@@ -109,6 +109,27 @@ tbody tr:last-child td{border-bottom:none;}
 .funnel-fill{height:100%;background:var(--teal);border-radius:6px;transition:width .4s;}
 .funnel-val{width:44px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--ink);flex-shrink:0;}
 
+/* stage bars (dashboard alt view) */
+.stagebars{display:flex;align-items:flex-end;gap:8px;height:190px;padding:6px 2px 0;}
+.stagebar-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;min-width:0;}
+.stagebar-val{font-size:11.5px;color:var(--ink);margin-bottom:4px;}
+.stagebar-track{width:100%;max-width:32px;flex:1;display:flex;align-items:flex-end;}
+.stagebar-fill{width:100%;border-radius:6px 6px 3px 3px;transition:height .4s;min-height:2px;}
+.stagebar-label{margin-top:8px;font-size:10px;color:var(--ink-soft);text-align:center;line-height:1.25;word-break:break-word;}
+
+/* stage donut (dashboard alt view) */
+.donut-wrap{display:flex;gap:20px;align-items:center;flex-wrap:wrap;}
+.donut-svg-holder{position:relative;width:180px;height:180px;flex-shrink:0;}
+.donut-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;}
+.donut-total{font-size:24px;font-weight:600;color:var(--ink);}
+.donut-total-label{font-size:10.5px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.03em;}
+.donut-legend{flex:1;min-width:170px;}
+.donut-legend-row{display:flex;align-items:center;gap:8px;margin-bottom:9px;font-size:12.5px;}
+.donut-swatch{width:10px;height:10px;border-radius:3px;flex-shrink:0;}
+.donut-legend-label{flex:1;color:var(--ink-2);}
+.donut-legend-val{color:var(--ink);font-weight:600;}
+.donut-legend-pct{color:var(--ink-soft);width:36px;text-align:right;}
+
 /* bar chart (payment) */
 .bar-row{display:flex;align-items:center;gap:10px;margin-bottom:10px;}
 .bar-label{width:130px;font-size:12.5px;color:var(--ink-2);flex-shrink:0;}
@@ -236,6 +257,7 @@ let courseFilter = 'all';
 let leadNameFilter = '';
 let leadsView = 'kanban';
 let draggedLeadId = null;
+let dashboardChartView = 'funnel';
 let editing = null;
 const MAX_CONTRACT_BYTES = 1.5 * 1024 * 1024;
 let currentUser = null;
@@ -285,6 +307,10 @@ const badgeClass = s => ({
   'Follow up':'b-followup','No-show':'b-noshow','Fechado':'b-fechado','Perdido':'b-perdido',
   'Agendada':'b-agendada','Realizada':'b-realizada','Cancelada':'b-cancelada'
 }[s] || 'b-novo');
+const STATUS_COLOR = {
+  'Novo':'#535C82','Reunião Agendada':'var(--teal)','Reunião Realizada':'#7A3336',
+  'Follow up':'#B7791F','No-show':'var(--danger)','Fechado':'var(--gold)','Perdido':'#888'
+};
 
 function maskDocument(input){
   let v = input.value.replace(/\D/g,'').slice(0,14);
@@ -569,13 +595,11 @@ function renderDashboard(){
   const noShowRate = (qtdRealizadas+qtdNoShow) ? Math.round(qtdNoShow/(qtdRealizadas+qtdNoShow)*100) : 0;
   const conversao = leads.length ? Math.round(sales.length/leads.length*100) : 0;
 
-  const funnelSteps = [
-    {label:'Leads recebidos', value: leads.length},
-    {label:'Reuniões agendadas', value: qtdReunioes},
-    {label:'Reuniões realizadas', value: qtdRealizadas},
-    {label:'Vendas fechadas', value: sales.length},
-  ];
-  const maxFunnel = Math.max(1, ...funnelSteps.map(f=>f.value));
+  const funnelSteps = LEAD_STATUS.map(status=>({
+    label: status,
+    value: leads.filter(l=>l.status===status).length,
+    color: STATUS_COLOR[status] || 'var(--teal)',
+  }));
 
   const byPayment = {};
   sales.forEach(s=>{ const n=paymentName(s.paymentMethod); byPayment[n]=(byPayment[n]||0)+Number(s.value||0); });
@@ -603,13 +627,15 @@ function renderDashboard(){
 
     <div class="grid2">
       <div class="card">
-        <div class="section-head"><h3>Funil de vendas</h3></div>
-        ${funnelSteps.map(f=>`
-          <div class="funnel-row">
-            <div class="funnel-label">${f.label}</div>
-            <div class="funnel-track"><div class="funnel-fill" style="width:${Math.round(f.value/maxFunnel*100)}%"></div></div>
-            <div class="funnel-val mono">${f.value}</div>
-          </div>`).join('')}
+        <div class="section-head">
+          <h3>Funil de vendas</h3>
+          <div class="view-toggle">
+            <button type="button" class="${dashboardChartView==='funnel'?'active':''}" onclick="setDashboardChartView('funnel')">Funil</button>
+            <button type="button" class="${dashboardChartView==='bars'?'active':''}" onclick="setDashboardChartView('bars')">Barras</button>
+            <button type="button" class="${dashboardChartView==='donut'?'active':''}" onclick="setDashboardChartView('donut')">Pizza</button>
+          </div>
+        </div>
+        ${renderStageChart(funnelSteps)}
       </div>
       <div class="card">
         <div class="section-head"><h3>Vendas por forma de pagamento</h3></div>
@@ -636,6 +662,69 @@ function renderDashboard(){
           </tr>`).join('') : `<tr class="empty-row"><td colspan="7">Cadastre closers para ver o desempenho.</td></tr>`}
         </tbody>
       </table>
+    </div>
+  `;
+}
+
+function setDashboardChartView(v){ dashboardChartView = v; render(); }
+
+function renderStageChart(steps){
+  if(dashboardChartView==='bars') return renderStageBars(steps);
+  if(dashboardChartView==='donut') return renderStageDonut(steps);
+  return renderStageFunnel(steps);
+}
+
+function renderStageFunnel(steps){
+  const max = Math.max(1, ...steps.map(s=>s.value));
+  return steps.map(f=>`
+    <div class="funnel-row">
+      <div class="funnel-label">${escapeHtml(f.label)}</div>
+      <div class="funnel-track"><div class="funnel-fill" style="width:${Math.round(f.value/max*100)}%;background:${f.color}"></div></div>
+      <div class="funnel-val mono">${f.value}</div>
+    </div>`).join('');
+}
+
+function renderStageBars(steps){
+  const max = Math.max(1, ...steps.map(s=>s.value));
+  return `<div class="stagebars">
+    ${steps.map(f=>`
+      <div class="stagebar-col">
+        <div class="stagebar-val mono">${f.value}</div>
+        <div class="stagebar-track"><div class="stagebar-fill" style="height:${f.value?Math.max(4,Math.round(f.value/max*100)):0}%;background:${f.color}"></div></div>
+        <div class="stagebar-label">${escapeHtml(f.label)}</div>
+      </div>`).join('')}
+  </div>`;
+}
+
+function renderStageDonut(steps){
+  const total = steps.reduce((a,s)=>a+s.value,0);
+  const r = 60, sw = 26, c = 2*Math.PI*r;
+  let offset = 0;
+  const gap = 3;
+  const arcs = total ? steps.filter(s=>s.value>0).map(f=>{
+    const len = Math.max(0, (f.value/total)*c - gap);
+    const arc = `<circle cx="90" cy="90" r="${r}" fill="none" stroke="${f.color}" stroke-width="${sw}" stroke-dasharray="${len} ${c-len}" stroke-dashoffset="${-offset}" stroke-linecap="round"/>`;
+    offset += (f.value/total)*c;
+    return arc;
+  }).join('') : `<circle cx="90" cy="90" r="${r}" fill="none" stroke="#EEF0F6" stroke-width="${sw}"/>`;
+  return `
+    <div class="donut-wrap">
+      <div class="donut-svg-holder">
+        <svg width="180" height="180" viewBox="0 0 180 180" style="transform:rotate(-90deg);">${arcs}</svg>
+        <div class="donut-center">
+          <div class="mono donut-total">${total}</div>
+          <div class="donut-total-label">leads</div>
+        </div>
+      </div>
+      <div class="donut-legend">
+        ${steps.map(f=>`
+          <div class="donut-legend-row">
+            <span class="donut-swatch" style="background:${f.color}"></span>
+            <span class="donut-legend-label">${escapeHtml(f.label)}</span>
+            <span class="mono donut-legend-val">${f.value}</span>
+            <span class="mono donut-legend-pct">${total?Math.round(f.value/total*100):0}%</span>
+          </div>`).join('')}
+      </div>
     </div>
   `;
 }
