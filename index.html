@@ -1450,7 +1450,7 @@ function salePaymentsSectionHtml(saleId, totalOverride){
       <div><label>Obs.</label><input id="f-pay-notes" placeholder="ex: 2ª parcela"></div>
       <div><button type="button" class="primary" onclick="addSalePayment('${saleId}')">Registrar</button></div>
     </div>
-    <p class="sale-hint" style="margin:6px 0 0;">Pagamentos são gravados na hora, independente do botão Salvar.</p>
+    <p class="sale-hint" style="margin:6px 0 0;">Ao registrar um pagamento, a venda inteira é salva automaticamente.</p>
   `;
 }
 function refreshSalePayments(saleId){
@@ -1464,10 +1464,12 @@ async function addSalePayment(saleId){
   if(amount<=0){ alert('Informe o valor pago.'); return; }
   const p = { id: uid(), saleId, amount, date: document.getElementById('f-pay-date').value||null,
     paymentMethod: document.getElementById('f-pay-method').value||null, notes: document.getElementById('f-pay-notes').value.trim() };
+  if(!(await persistSale())) return;
   const {error} = await sb.from('sale_payments').insert({id:p.id, sale_id:p.saleId, amount:p.amount, date:p.date, payment_method:p.paymentMethod, notes:p.notes||null});
   if(error){ alert('Erro ao registrar pagamento: '+error.message); return; }
   state.salePayments.push(p);
   refreshSalePayments(saleId);
+  render();
 }
 async function markSalePaid(saleId){
   const sale = state.sales.find(s=>s.id===saleId); if(!sale) return;
@@ -1478,10 +1480,12 @@ async function markSalePaid(saleId){
   if(!confirm(`Registrar pagamento de ${fmtCurrency(open)} com a data de hoje e marcar a venda como quitada?`)) return;
   const method = document.getElementById('f-pay-method')?.value || sale.paymentMethod || state.paymentMethods[0]?.id || null;
   const p = { id: uid(), saleId, amount: open, date: new Date().toISOString().slice(0,10), paymentMethod: method, notes: 'Quitação' };
+  if(!(await persistSale())) return;
   const {error} = await sb.from('sale_payments').insert({id:p.id, sale_id:p.saleId, amount:p.amount, date:p.date, payment_method:p.paymentMethod, notes:p.notes});
   if(error){ alert('Erro ao registrar quitação: '+error.message); return; }
   state.salePayments.push(p);
   refreshSalePayments(saleId);
+  render();
 }
 async function removeSalePayment(paymentId){
   const p = state.salePayments.find(x=>x.id===paymentId); if(!p) return;
@@ -1490,6 +1494,7 @@ async function removeSalePayment(paymentId){
   if(error){ alert('Erro ao remover pagamento: '+error.message); return; }
   state.salePayments = state.salePayments.filter(x=>x.id!==paymentId);
   refreshSalePayments(p.saleId);
+  render();
 }
 
 function prefillPhonesFromStudent(){
@@ -1512,20 +1517,25 @@ function fillFromLead(leadId){
 }
 
 async function saveSale(){
+  if(!(await persistSale())) return;
+  closeModal(); render();
+}
+// Grava a venda a partir do formulário sem fechar o modal. Retorna true se salvou.
+async function persistSale(){
   const studentName = document.getElementById('f-name').value.trim();
   const value = parseFloat(document.getElementById('f-value').value)||0;
-  if(!studentName){ alert('Informe o nome da aluna.'); return; }
+  if(!studentName){ alert('Informe o nome da aluna.'); return false; }
   const leadId = document.getElementById('f-lead').value;
   const closerId = document.getElementById('f-closer').value;
   const closer2Id = document.getElementById('f-closer2').value || '';
-  if(closer2Id && closer2Id===closerId){ alert('O closer 2 precisa ser diferente do closer 1.'); return; }
+  if(closer2Id && closer2Id===closerId){ alert('O closer 2 precisa ser diferente do closer 1.'); return false; }
   const splitPercent = closer2Id ? Math.min(99, Math.max(1, parseInt(document.getElementById('f-split').value,10)||50)) : 100;
   const classId = document.getElementById('f-class').value || '';
   const listPriceRaw = document.getElementById('f-list-price').value;
   const cls = classById(classId);
   if(cls && Number(cls.capacity||0)>0 && (!editing || editing.classId!==classId)){
     const qty = classOccupancy(classId);
-    if(qty>=Number(cls.capacity) && !confirm(`A turma "${classLabel(cls)}" já está lotada (${qty}/${cls.capacity} vagas). Registrar a venda mesmo assim?`)) return;
+    if(qty>=Number(cls.capacity) && !confirm(`A turma "${classLabel(cls)}" já está lotada (${qty}/${cls.capacity} vagas). Registrar a venda mesmo assim?`)) return false;
   }
   const data = {
     id: editing ? editing.id : uid(),
@@ -1544,7 +1554,7 @@ async function saveSale(){
     closer_id:data.closerId||null, closer2_id:data.closer2Id||null, split_percent:data.splitPercent,
     value:data.value, list_price:data.listPrice, payment_method:data.paymentMethod||null, date:data.date||null, notes:data.notes||null,
   });
-  if(error){ alert('Erro ao salvar venda: '+error.message); return; }
+  if(error){ alert('Erro ao salvar venda: '+error.message); return false; }
   if(editing){ Object.assign(editing, data); } else { state.sales.push(data); }
   if(!editing){
     const firstAmount = parseFloat(document.getElementById('f-first-amount').value)||0;
@@ -1561,7 +1571,7 @@ async function saveSale(){
     if(lead){ lead.status = 'Fechado'; await sb.from('leads').update({status:'Fechado'}).eq('id', leadId); }
   }
   await upsertStudentFromSale(data, leadId, phones);
-  closeModal(); render();
+  return true;
 }
 
 async function upsertStudentFromSale(saleData, leadId, phones){
