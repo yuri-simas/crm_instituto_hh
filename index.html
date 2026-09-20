@@ -372,6 +372,18 @@ function closerName(id){ const c=state.closers.find(c=>c.id===id); return c?c.na
 function leadName(id){ const l=state.leads.find(l=>l.id===id); return l?l.name:'—';}
 function leadCourseIds(id){ const l=state.leads.find(l=>l.id===id); return l?(l.courseIds||[]):[];}
 function paymentName(id){ const p=state.paymentMethods.find(p=>p.id===id); return p?p.name:'—';}
+function saleShare(sale, closerId){
+  if(!closerId) return 0;
+  const split = (sale.closer2Id && sale.splitPercent!=null) ? Math.min(100, Math.max(0, Number(sale.splitPercent))) : 100;
+  if(sale.closerId===closerId) return sale.closer2Id ? split/100 : 1;
+  if(sale.closer2Id===closerId) return 1 - split/100;
+  return 0;
+}
+function saleClosersLabel(sale){
+  if(!sale.closer2Id) return closerName(sale.closerId);
+  const split = Math.round(Number(sale.splitPercent==null?50:sale.splitPercent));
+  return `${closerName(sale.closerId)} + ${closerName(sale.closer2Id)} (${split}/${100-split})`;
+}
 function classById(id){ return state.classes.find(c=>c.id===id) || null; }
 function classLabel(cls){ if(!cls) return '—'; return cls.startDate ? `${cls.name} · ${fmtDate(cls.startDate)}` : cls.name; }
 function className(id){ return classLabel(classById(id)); }
@@ -466,7 +478,7 @@ async function loadState(){
         courseIds: leadCoursesR.data.filter(lc=>lc.lead_id===r.id).map(lc=>lc.course_id),
       })),
       meetings: meetingsR.data.map(r=>({id:r.id, leadId:r.lead_id, closerId:r.closer_id||'', scheduledDate:r.scheduled_date, status:r.status, notes:r.notes})),
-      sales: salesR.data.map(r=>({id:r.id, studentName:r.student_name, leadId:r.lead_id, courseId:r.course_id, classId:r.class_id||'', closerId:r.closer_id, value:r.value, listPrice:r.list_price, paymentMethod:r.payment_method, date:r.date, notes:r.notes||''})),
+      sales: salesR.data.map(r=>({id:r.id, studentName:r.student_name, leadId:r.lead_id, courseId:r.course_id, classId:r.class_id||'', closerId:r.closer_id, closer2Id:r.closer2_id||'', splitPercent:r.split_percent==null?100:Number(r.split_percent), value:r.value, listPrice:r.list_price, paymentMethod:r.payment_method, date:r.date, notes:r.notes||''})),
       classes: classesR.data.map(r=>({id:r.id, courseId:r.course_id, name:r.name, startDate:r.start_date, endDate:r.end_date, capacity:r.capacity||0, price:r.price})),
       salePayments: salePaymentsR.data.map(r=>({id:r.id, saleId:r.sale_id, amount:r.amount, date:r.date, paymentMethod:r.payment_method, notes:r.notes||''})),
       classEnrollments: enrollmentsR.data.map(r=>({id:r.id, classId:r.class_id, studentId:r.student_id, notes:r.notes||''})),
@@ -590,7 +602,7 @@ function escapeHtml(s){ return (s||'').toString().replace(/[&<>"']/g, m=>({'&':'
 /* ---------- filtered data helpers ---------- */
 function scopeByRole(list){
   if(currentUser.role==='closer' && currentUser.closerId){
-    return list.filter(x=>x.closerId===currentUser.closerId);
+    return list.filter(x=>x.closerId===currentUser.closerId || x.closer2Id===currentUser.closerId);
   }
   return list;
 }
@@ -681,8 +693,8 @@ function renderDashboard(){
     const cLeads = leads.filter(l=>l.closerId===c.id);
     const cMeetRealizadas = meetings.filter(m=>m.closerId===c.id && m.status==='Realizada').length;
     const cMeetNoShow = meetings.filter(m=>m.closerId===c.id && m.status==='No-show').length;
-    const cSales = sales.filter(s=>s.closerId===c.id);
-    const cValor = cSales.reduce((a,s)=>a+Number(s.value||0),0);
+    const cSales = sales.filter(s=>saleShare(s,c.id)>0);
+    const cValor = cSales.reduce((a,s)=>a+Number(s.value||0)*saleShare(s,c.id),0);
     const conv = cLeads.length ? Math.round(cSales.length/cLeads.length*100) : 0;
     return {name:c.name, leads:cLeads.length, realizadas:cMeetRealizadas, noshow:cMeetNoShow, vendas:cSales.length, valor:cValor, conv};
   }).sort((a,b)=>b.valor-a.valor);
@@ -1218,7 +1230,7 @@ function renderSales(){
           <tr>
             <td style="font-weight:600;color:var(--ink);">${escapeHtml(s.studentName)}</td>
             <td>${escapeHtml(courseName(s.courseId))}${cls?`<div style="font-size:11.5px;color:var(--ink-soft);">${escapeHtml(classLabel(cls))}</div>`:''}</td>
-            <td>${escapeHtml(closerName(s.closerId))}</td>
+            <td>${escapeHtml(saleClosersLabel(s))}</td>
             <td class="mono" style="color:var(--gold);font-weight:600;">${fmtCurrency(s.value)}${discount?`<div style="font-size:10.5px;color:var(--ink-soft);font-weight:400;">desc. ${fmtCurrency(discount)}</div>`:''}</td>
             <td class="mono">${fmtCurrency(paid)}</td>
             <td class="mono" style="${open>0?'color:var(--danger);font-weight:600;':''}">${fmtCurrency(open)}</td>
@@ -1251,7 +1263,7 @@ function saleClassOptionsHtml(courseId, selectedId){
 function openSaleModal(id){
   editing = id ? state.sales.find(s=>s.id===id) : null;
   const today = new Date().toISOString().slice(0,10);
-  const s = editing || {studentName:'',leadId:'',courseId:state.courses[0]?.id||'',classId:'',closerId:state.closers[0]?.id||'',value:'',listPrice:'',paymentMethod:state.paymentMethods[0]?.id||'',date:today,notes:''};
+  const s = editing || {studentName:'',leadId:'',courseId:state.courses[0]?.id||'',classId:'',closerId:state.closers[0]?.id||'',closer2Id:'',splitPercent:50,value:'',listPrice:'',paymentMethod:state.paymentMethods[0]?.id||'',date:today,notes:''};
   const listPrice = (s.listPrice!=null && s.listPrice!=='') ? s.listPrice : (state.courses.find(c=>c.id===s.courseId)?.price ?? '');
   const payOpts = sel => state.paymentMethods.map(p=>`<option value="${p.id}" ${sel===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('');
   document.getElementById('modal').classList.add('wide');
@@ -1263,7 +1275,17 @@ function openSaleModal(id){
       <div class="field"><label class="field-label">Curso</label><select id="f-course" onchange="onSaleCourseChange()">${state.courses.map(c=>`<option value="${c.id}" ${s.courseId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('') || '<option value="">Cadastre um curso</option>'}</select></div>
       <div class="field"><label class="field-label">Turma</label><select id="f-class" onchange="onSaleClassChange()">${saleClassOptionsHtml(s.courseId, s.classId)}</select></div>
     </div>
-    <div class="field"><label class="field-label">Closer</label><select id="f-closer">${state.closers.map(c=>`<option value="${c.id}" ${s.closerId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('') || '<option value="">Cadastre um closer</option>'}</select></div>
+    <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
+      <div class="field"><label class="field-label">Closer</label><select id="f-closer" onchange="updateSplitUI()">${state.closers.map(c=>`<option value="${c.id}" ${s.closerId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('') || '<option value="">Cadastre um closer</option>'}</select></div>
+      <div class="field"><label class="field-label">Closer 2 (dividir comissão)</label><select id="f-closer2" onchange="updateSplitUI()"><option value="">— sem divisão —</option>${state.closers.map(c=>`<option value="${c.id}" ${s.closer2Id===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div>
+    </div>
+    <div id="split-row" class="field" style="display:none;">
+      <label class="field-label">Divisão da comissão — parte do closer 1 (%)</label>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <input type="number" min="1" max="99" step="1" id="f-split" value="${s.closer2Id ? Math.round(Number(s.splitPercent==null?50:s.splitPercent)) : 50}" style="width:90px;" oninput="updateSplitUI()">
+        <span id="split-hint" class="sale-hint" style="margin:0;"></span>
+      </div>
+    </div>
     <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
       <div class="field"><label class="field-label">Preço de tabela (R$)</label><input type="number" step="0.01" id="f-list-price" value="${listPrice}" placeholder="0,00" oninput="updateSaleDiscount()"></div>
       <div class="field"><label class="field-label">Valor negociado (R$)</label><input type="number" step="0.01" id="f-value" value="${s.value}" placeholder="0,00" oninput="updateSaleDiscount();if(editing)refreshSalePayments(editing.id)"></div>
@@ -1292,7 +1314,19 @@ function openSaleModal(id){
       <button class="primary" onclick="saveSale()">Salvar</button>
     </div>`;
   updateSaleDiscount();
+  updateSplitUI();
   openModal();
+}
+
+function updateSplitUI(){
+  const row = document.getElementById('split-row'); if(!row) return;
+  const c1 = document.getElementById('f-closer').value, c2 = document.getElementById('f-closer2').value;
+  row.style.display = c2 ? 'block' : 'none';
+  if(!c2) return;
+  const split = Math.min(99, Math.max(1, parseInt(document.getElementById('f-split').value,10)||50));
+  const hint = document.getElementById('split-hint');
+  hint.textContent = c1===c2 ? 'Closer 2 precisa ser diferente do closer 1.' : `${closerName(c1)} ${split}% · ${closerName(c2)} ${100-split}%`;
+  hint.style.color = c1===c2 ? 'var(--danger)' : '';
 }
 
 function onSaleCourseChange(){
@@ -1396,6 +1430,10 @@ async function saveSale(){
   const value = parseFloat(document.getElementById('f-value').value)||0;
   if(!studentName){ alert('Informe o nome da aluna.'); return; }
   const leadId = document.getElementById('f-lead').value;
+  const closerId = document.getElementById('f-closer').value;
+  const closer2Id = document.getElementById('f-closer2').value || '';
+  if(closer2Id && closer2Id===closerId){ alert('O closer 2 precisa ser diferente do closer 1.'); return; }
+  const splitPercent = closer2Id ? Math.min(99, Math.max(1, parseInt(document.getElementById('f-split').value,10)||50)) : 100;
   const classId = document.getElementById('f-class').value || '';
   const listPriceRaw = document.getElementById('f-list-price').value;
   const cls = classById(classId);
@@ -1408,7 +1446,7 @@ async function saveSale(){
     studentName, leadId: leadId||null,
     courseId: document.getElementById('f-course').value,
     classId,
-    closerId: document.getElementById('f-closer').value,
+    closerId, closer2Id, splitPercent,
     value, listPrice: listPriceRaw==='' ? null : (parseFloat(listPriceRaw)||0),
     paymentMethod: document.getElementById('f-payment').value,
     date: document.getElementById('f-date').value,
@@ -1416,7 +1454,8 @@ async function saveSale(){
   };
   const {error} = await sb.from('sales').upsert({
     id:data.id, student_name:data.studentName, lead_id:data.leadId, course_id:data.courseId||null, class_id:data.classId||null,
-    closer_id:data.closerId||null, value:data.value, list_price:data.listPrice, payment_method:data.paymentMethod||null, date:data.date||null, notes:data.notes||null,
+    closer_id:data.closerId||null, closer2_id:data.closer2Id||null, split_percent:data.splitPercent,
+    value:data.value, list_price:data.listPrice, payment_method:data.paymentMethod||null, date:data.date||null, notes:data.notes||null,
   });
   if(error){ alert('Erro ao salvar venda: '+error.message); return; }
   if(editing){ Object.assign(editing, data); } else { state.sales.push(data); }
@@ -1478,8 +1517,8 @@ async function upsertStudentFromSale(saleData, leadId){
 function renderCommissions(){
   const sales = filteredSales();
   const rows = state.closers.map(c=>{
-    const cSales = sales.filter(s=>s.closerId===c.id);
-    const total = cSales.reduce((a,s)=>a+Number(s.value||0),0);
+    const cSales = sales.filter(s=>saleShare(s,c.id)>0);
+    const total = cSales.reduce((a,s)=>a+Number(s.value||0)*saleShare(s,c.id),0);
     const base = Number(c.commissionPercent||0);
     const threshold = Number(c.acceleratorThreshold||0);
     const accel = Number(c.acceleratorPercent||0);
@@ -1493,7 +1532,7 @@ function renderCommissions(){
   });
   return `
     ${toolbarHtml('Comissionamento','Novo closer','openCloserModal()')}
-    <div class="pill-note">Comissão = percentual base sobre o total vendido. Se o acelerador estiver configurado e o total vendido ultrapassar a meta, o excedente é calculado com o percentual acelerado.</div>
+    <div class="pill-note">Comissão = percentual base sobre o total vendido. Se o acelerador estiver configurado e o total vendido ultrapassar a meta, o excedente é calculado com o percentual acelerado. Em vendas com comissão dividida, cada closer conta apenas a sua parte do valor.</div>
     <div class="card">
       <table>
         <thead><tr><th>Closer</th><th>% base</th><th>Meta acelerador</th><th>% acelerado</th><th>Vendas</th><th>Total vendido</th><th>Comissão devida</th><th></th></tr></thead>
@@ -2037,7 +2076,8 @@ async function importBackupFile(input){
     if((parsed.sales||[]).length){
       const {error} = await sb.from('sales').insert(parsed.sales.map(s=>({
         id:s.id, student_name:s.studentName, lead_id:s.leadId||null, course_id:s.courseId||null, class_id:s.classId||null,
-        closer_id:s.closerId||null, value:s.value||0, list_price:(s.listPrice==null||s.listPrice==='')?null:s.listPrice,
+        closer_id:s.closerId||null, closer2_id:s.closer2Id||null, split_percent:(s.splitPercent==null?100:s.splitPercent),
+        value:s.value||0, list_price:(s.listPrice==null||s.listPrice==='')?null:s.listPrice,
         payment_method:s.paymentMethod||null, date:s.date||null, notes:s.notes||null,
       })));
       if(error) throw error;
@@ -2230,6 +2270,9 @@ async function deleteItem(collection, id){
   }
   if(collection==='sales'){
     state.salePayments = state.salePayments.filter(p=>p.saleId!==id);
+  }
+  if(collection==='closers'){
+    state.sales.forEach(s=>{ if(s.closer2Id===id){ s.closer2Id=''; s.splitPercent=100; } });
   }
   if(collection==='classes'){
     state.sales.forEach(s=>{ if(s.classId===id) s.classId=''; });

@@ -76,3 +76,8 @@ create index if not exists class_enrollments_class_id_idx on class_enrollments(c
 alter table class_enrollments enable row level security;
 drop policy if exists authenticated_all on class_enrollments;
 create policy authenticated_all on class_enrollments for all to authenticated using (true) with check (true);
+
+-- ========== 6) COMISSÃO DIVIDIDA ENTRE DOIS CLOSERS ==========
+-- closer2_id: segundo closer (opcional). split_percent: parte do closer 1 em % (100 = sem divisão).
+alter table sales add column if not exists closer2_id text references closers(id) on delete set null;
+alter table sales add column if not exists split_percent numeric default 100;
