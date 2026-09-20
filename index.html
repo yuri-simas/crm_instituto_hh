@@ -89,6 +89,34 @@ tbody tr:last-child td{border-bottom:none;}
 .b-perdido{background:#F0F0F0;color:#888;}
 .b-cancelada{background:#F0F0F0;color:#888;}
 .b-followup{background:#FDEFD9;color:#B7791F;}
+.b-quitado{background:#E3F1E7;color:#2F6B45;}
+.b-parcial{background:#FDEFD9;color:#B7791F;}
+.b-aberto{background:var(--danger-bg);color:var(--danger);}
+.b-lotada{background:var(--danger-bg);color:var(--danger);}
+
+/* turmas e pagamentos */
+.course-block{margin-bottom:16px;}
+.course-block .course-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;}
+.course-block .course-head h3{font-size:16px;}
+.course-block .course-head .meta{font-size:12.5px;color:var(--ink-soft);}
+.class-students{font-size:12px;color:var(--ink-soft);margin-top:4px;}
+.class-students summary{cursor:pointer;color:var(--teal);font-weight:600;list-style:none;}
+.class-students summary::-webkit-details-marker{display:none;}
+.class-students ul{margin:6px 0 0;padding-left:16px;}
+.pay-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0 10px;}
+.pay-summary .box{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;}
+.pay-summary .box .label{font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-soft);}
+.pay-summary .box .val{font-family:'IBM Plex Mono',monospace;font-size:15px;font-weight:600;margin-top:2px;color:var(--ink);}
+.pay-summary .box .val.gold{color:var(--gold);}
+.pay-summary .box .val.danger{color:var(--danger);}
+.pay-summary .box .val.ok{color:#2F6B45;}
+.pay-list{border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:10px;}
+.pay-list table{font-size:12.5px;}
+.pay-list tbody td{padding:7px 10px;}
+.pay-add{display:grid;grid-template-columns:1.1fr 1.1fr 1.3fr auto;gap:6px;align-items:end;}
+.pay-add label{font-size:10.5px;color:var(--ink-soft);display:block;margin-bottom:3px;}
+.pay-add input,.pay-add select{width:100%;}
+.sale-hint{font-size:11.5px;color:var(--ink-soft);margin:-8px 0 12px;}
 
 /* metric cards */
 .grid-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:22px;}
@@ -165,6 +193,7 @@ tbody tr:last-child td{border-bottom:none;}
 #modal-overlay.open{display:flex;}
 #modal{background:#fff;border-radius:14px;width:100%;max-width:480px;max-height:88vh;overflow-y:auto;padding:24px 26px;}
 #modal h3{font-size:17px;margin-bottom:16px;}
+#modal.wide{max-width:640px;}
 .field{margin-bottom:14px;}
 .field select,.field input,.field textarea{width:100%;}
 .checkgrid{display:flex;flex-wrap:wrap;gap:8px;}
@@ -271,6 +300,7 @@ const TABS = [
   {key:'contracts', label:'Contratos', roles:['admin','closer']},
   {key:'commissions', label:'Comissionamento', roles:['admin']},
   {key:'courses', label:'Cursos', roles:['admin']},
+  {key:'classes', label:'Turmas', roles:['admin','closer']},
   {key:'payments', label:'Formas de Pagamento', roles:['admin']},
   {key:'users', label:'Usuários e Acessos', roles:['admin']},
   {key:'backup', label:'Backup de Dados', roles:['admin']},
@@ -342,6 +372,23 @@ function closerName(id){ const c=state.closers.find(c=>c.id===id); return c?c.na
 function leadName(id){ const l=state.leads.find(l=>l.id===id); return l?l.name:'—';}
 function leadCourseIds(id){ const l=state.leads.find(l=>l.id===id); return l?(l.courseIds||[]):[];}
 function paymentName(id){ const p=state.paymentMethods.find(p=>p.id===id); return p?p.name:'—';}
+function classById(id){ return state.classes.find(c=>c.id===id) || null; }
+function classLabel(cls){ if(!cls) return '—'; return cls.startDate ? `${cls.name} · ${fmtDate(cls.startDate)}` : cls.name; }
+function className(id){ return classLabel(classById(id)); }
+function classesOfCourse(courseId){
+  return state.classes.filter(c=>c.courseId===courseId).sort((a,b)=>(a.startDate||'9999').localeCompare(b.startDate||'9999') || a.name.localeCompare(b.name,'pt-BR'));
+}
+function classSales(classId){ return state.sales.filter(s=>s.classId===classId); }
+function classPrice(cls){ if(!cls) return null; if(cls.price!=null && cls.price!=='') return Number(cls.price); const c=state.courses.find(c=>c.id===cls.courseId); return c?Number(c.price||0):null; }
+function salePayments(saleId){ return state.salePayments.filter(p=>p.saleId===saleId).sort((a,b)=>(a.date||'').localeCompare(b.date||'')); }
+function salePaid(saleId){ return salePayments(saleId).reduce((a,p)=>a+Number(p.amount||0),0); }
+function saleOpen(sale){ return Math.max(0, Number(sale.value||0) - salePaid(sale.id)); }
+function salePayStatus(sale){
+  const total = Number(sale.value||0), paid = salePaid(sale.id);
+  if(total<=0 || paid>=total-0.005) return {label:'Quitado', cls:'b-quitado'};
+  if(paid>0) return {label:'Parcial', cls:'b-parcial'};
+  return {label:'Em aberto', cls:'b-aberto'};
+}
 
 function defaultState(){
   return {
@@ -358,6 +405,8 @@ function defaultState(){
     meetings: [],
     sales: [],
     users: [],
+    classes: [],
+    salePayments: [],
   };
 }
 
@@ -372,7 +421,7 @@ async function rowToHistory(h){
 
 async function loadState(){
   try{
-    const [coursesR, paymentsR, closersR, usersR, leadsR, leadCoursesR, meetingsR, salesR, studentsR, historyR] = await Promise.all([
+    const [coursesR, paymentsR, closersR, usersR, leadsR, leadCoursesR, meetingsR, salesR, studentsR, historyR, classesR, salePaymentsR] = await Promise.all([
       sb.from('courses').select('*'),
       sb.from('payment_methods').select('*'),
       sb.from('closers').select('*'),
@@ -383,8 +432,10 @@ async function loadState(){
       sb.from('sales').select('*'),
       sb.from('students').select('*'),
       sb.from('student_course_history').select('*'),
+      sb.from('course_classes').select('*'),
+      sb.from('sale_payments').select('*'),
     ]);
-    const results = [coursesR,paymentsR,closersR,usersR,leadsR,leadCoursesR,meetingsR,salesR,studentsR,historyR];
+    const results = [coursesR,paymentsR,closersR,usersR,leadsR,leadCoursesR,meetingsR,salesR,studentsR,historyR,classesR,salePaymentsR];
     const firstError = results.find(r=>r.error);
     if(firstError) throw firstError.error;
 
@@ -401,7 +452,9 @@ async function loadState(){
         courseIds: leadCoursesR.data.filter(lc=>lc.lead_id===r.id).map(lc=>lc.course_id),
       })),
       meetings: meetingsR.data.map(r=>({id:r.id, leadId:r.lead_id, closerId:r.closer_id||'', scheduledDate:r.scheduled_date, status:r.status, notes:r.notes})),
-      sales: salesR.data.map(r=>({id:r.id, studentName:r.student_name, leadId:r.lead_id, courseId:r.course_id, closerId:r.closer_id, value:r.value, paymentMethod:r.payment_method, date:r.date})),
+      sales: salesR.data.map(r=>({id:r.id, studentName:r.student_name, leadId:r.lead_id, courseId:r.course_id, classId:r.class_id||'', closerId:r.closer_id, value:r.value, listPrice:r.list_price, paymentMethod:r.payment_method, date:r.date, notes:r.notes||''})),
+      classes: classesR.data.map(r=>({id:r.id, courseId:r.course_id, name:r.name, startDate:r.start_date, endDate:r.end_date, capacity:r.capacity||0, price:r.price})),
+      salePayments: salePaymentsR.data.map(r=>({id:r.id, saleId:r.sale_id, amount:r.amount, date:r.date, paymentMethod:r.payment_method, notes:r.notes||''})),
       students: await Promise.all(studentsR.data.map(async r=>({
         id:r.id, name:r.name, phone:r.phone, email:r.email, cpf:r.cpf, professionalRegistration:r.professional_registration, cep:r.cep, address:r.address,
         courseHistory: await Promise.all(historyR.data.filter(h=>h.student_id===r.id).map(rowToHistory)),
@@ -565,7 +618,7 @@ function render(){
   renderNav();
   renderCourseFilterOptions();
   const titleMap = {dashboard:'Dashboard', students:'Alunas', leads:'Leads', meetings:'Reuniões',
-    sales:'Vendas', contracts:'Contratos', commissions:'Comissionamento', courses:'Cursos', payments:'Formas de Pagamento', users:'Usuários e Acessos', backup:'Backup de Dados'};
+    sales:'Vendas', contracts:'Contratos', commissions:'Comissionamento', courses:'Cursos', classes:'Turmas', payments:'Formas de Pagamento', users:'Usuários e Acessos', backup:'Backup de Dados'};
   document.getElementById('page-title').textContent = titleMap[currentTab];
   document.getElementById('page-sub').textContent = courseFilter==='all' ? 'Todos os cursos' : courseName(courseFilter);
   const el = document.getElementById('content');
@@ -577,6 +630,7 @@ function render(){
   else if(currentTab==='contracts') el.innerHTML = renderContracts();
   else if(currentTab==='commissions') el.innerHTML = renderCommissions();
   else if(currentTab==='courses') el.innerHTML = renderCourses();
+  else if(currentTab==='classes') el.innerHTML = renderClasses();
   else if(currentTab==='payments') el.innerHTML = renderPayments();
   else if(currentTab==='users') el.innerHTML = renderUsers();
   else if(currentTab==='backup') el.innerHTML = renderBackup();
@@ -589,6 +643,8 @@ function renderDashboard(){
   const sales = filteredSales();
 
   const totalVendido = sales.reduce((a,s)=>a+Number(s.value||0),0);
+  const totalRecebido = sales.reduce((a,s)=>a+Math.min(Number(s.value||0), salePaid(s.id)),0);
+  const totalAberto = sales.reduce((a,s)=>a+saleOpen(s),0);
   const qtdReunioes = meetings.filter(m=>['Agendada','Realizada','No-show'].includes(m.status)).length;
   const qtdRealizadas = meetings.filter(m=>m.status==='Realizada').length;
   const qtdNoShow = meetings.filter(m=>m.status==='No-show').length;
@@ -619,6 +675,8 @@ function renderDashboard(){
   return `
     <div class="grid-metrics">
       <div class="metric"><div class="label">Total vendido</div><div class="value gold mono">${fmtCurrency(totalVendido)}</div></div>
+      <div class="metric"><div class="label">Recebido</div><div class="value teal mono">${fmtCurrency(totalRecebido)}</div></div>
+      <div class="metric"><div class="label">A receber</div><div class="value ${totalAberto>0?'danger':''} mono">${fmtCurrency(totalAberto)}</div></div>
       <div class="metric"><div class="label">Leads recebidos</div><div class="value mono">${leads.length}</div></div>
       <div class="metric"><div class="label">Reuniões realizadas</div><div class="value teal mono">${qtdRealizadas}</div></div>
       <div class="metric"><div class="label">Taxa de no-show</div><div class="value ${noShowRate>25?'danger':''} mono">${noShowRate}%</div></div>
@@ -752,7 +810,7 @@ function renderStudents(){
             <td style="font-weight:600;color:var(--ink);">${escapeHtml(s.name)}</td>
             <td class="mono" style="font-size:12px;">${escapeHtml(s.phone||'')}<br>${escapeHtml(s.email||'')}</td>
             <td class="mono">${escapeHtml(s.cpf||'—')}</td>
-            <td>${(s.courseHistory||[]).map(ch=>`<span class="badge b-fechado" style="margin-right:4px;margin-bottom:4px;display:inline-block;">${escapeHtml(courseName(ch.courseId))} · ${escapeHtml(paymentName(ch.paymentMethod))}</span>`).join('') || '—'}</td>
+            <td>${(s.courseHistory||[]).map(ch=>{const sale=ch.saleId?state.sales.find(x=>x.id===ch.saleId):null; const cl=sale?classById(sale.classId):null; const st=sale?salePayStatus(sale):null; return `<span class="badge ${st&&st.label!=='Quitado'?st.cls:'b-fechado'}" style="margin-right:4px;margin-bottom:4px;display:inline-block;" title="${st?escapeHtml(st.label):''}">${escapeHtml(courseName(ch.courseId))}${cl?' · '+escapeHtml(cl.name):''} · ${escapeHtml(paymentName(ch.paymentMethod))}${st&&st.label!=='Quitado'?' · '+st.label:''}</span>`;}).join('') || '—'}</td>
             <td style="text-align:right;white-space:nowrap;">
               <button class="ghost" onclick="openStudentModal('${s.id}')">Editar</button>
               <button class="danger-ghost" onclick="deleteItem('students','${s.id}')">Excluir</button>
@@ -1114,49 +1172,200 @@ async function saveMeeting(){
 
 /* ---------- SALES ---------- */
 function renderSales(){
-  const rows = filteredSales();
+  const all = filteredSales();
+  const totalVendido = all.reduce((a,s)=>a+Number(s.value||0),0);
+  const totalRecebido = all.reduce((a,s)=>a+Math.min(Number(s.value||0), salePaid(s.id)),0);
+  const totalAberto = all.reduce((a,s)=>a+saleOpen(s),0);
+  const qtdAberto = all.filter(s=>saleOpen(s)>0.005).length;
+  const rows = salesView==='open' ? all.filter(s=>saleOpen(s)>0.005) : all;
   return `
-    ${toolbarHtml('Vendas','Nova venda','openSaleModal()')}
+    <div class="toolbar">
+      <div class="view-toggle">
+        <button type="button" class="${salesView==='all'?'active':''}" onclick="setSalesView('all')">Todas (${all.length})</button>
+        <button type="button" class="${salesView==='open'?'active':''}" onclick="setSalesView('open')">Com saldo em aberto (${qtdAberto})</button>
+      </div>
+      <button class="primary" onclick="openSaleModal()"><i></i>+ Nova venda</button>
+    </div>
+    <div class="grid-metrics">
+      <div class="metric"><div class="label">Total vendido</div><div class="value gold mono">${fmtCurrency(totalVendido)}</div></div>
+      <div class="metric"><div class="label">Recebido</div><div class="value teal mono">${fmtCurrency(totalRecebido)}</div></div>
+      <div class="metric"><div class="label">A receber</div><div class="value ${totalAberto>0?'danger':''} mono">${fmtCurrency(totalAberto)}</div></div>
+    </div>
     <div class="card">
       <table>
-        <thead><tr><th>Aluna</th><th>Curso</th><th>Closer</th><th>Valor</th><th>Pagamento</th><th>Data</th><th></th></tr></thead>
+        <thead><tr><th>Aluna</th><th>Curso / Turma</th><th>Closer</th><th>Valor</th><th>Pago</th><th>Em aberto</th><th>Situação</th><th>Data</th><th></th></tr></thead>
         <tbody>
-        ${rows.length ? rows.map(s=>`
+        ${rows.length ? rows.map(s=>{
+          const paid = salePaid(s.id), open = saleOpen(s), st = salePayStatus(s);
+          const cls = classById(s.classId);
+          const discount = (s.listPrice!=null && Number(s.listPrice)>Number(s.value||0)) ? Number(s.listPrice)-Number(s.value||0) : 0;
+          return `
           <tr>
             <td style="font-weight:600;color:var(--ink);">${escapeHtml(s.studentName)}</td>
-            <td>${escapeHtml(courseName(s.courseId))}</td>
+            <td>${escapeHtml(courseName(s.courseId))}${cls?`<div style="font-size:11.5px;color:var(--ink-soft);">${escapeHtml(classLabel(cls))}</div>`:''}</td>
             <td>${escapeHtml(closerName(s.closerId))}</td>
-            <td class="mono" style="color:var(--gold);font-weight:600;">${fmtCurrency(s.value)}</td>
-            <td>${escapeHtml(paymentName(s.paymentMethod))}</td>
+            <td class="mono" style="color:var(--gold);font-weight:600;">${fmtCurrency(s.value)}${discount?`<div style="font-size:10.5px;color:var(--ink-soft);font-weight:400;">desc. ${fmtCurrency(discount)}</div>`:''}</td>
+            <td class="mono">${fmtCurrency(paid)}</td>
+            <td class="mono" style="${open>0?'color:var(--danger);font-weight:600;':''}">${fmtCurrency(open)}</td>
+            <td><span class="badge ${st.cls}">${st.label}</span></td>
             <td class="mono">${fmtDate(s.date)}</td>
             <td style="text-align:right;white-space:nowrap;">
-              <button class="ghost" onclick="openSaleModal('${s.id}')">Editar</button>
+              <button class="ghost" onclick="openSaleModal('${s.id}')">${open>0?'Pagamentos':'Editar'}</button>
               <button class="danger-ghost" onclick="deleteItem('sales','${s.id}')">Excluir</button>
             </td>
-          </tr>`).join('') : `<tr class="empty-row"><td colspan="7">Nenhuma venda fechada ainda.</td></tr>`}
+          </tr>`;}).join('') : `<tr class="empty-row"><td colspan="9">${salesView==='open'?'Nenhuma venda com saldo em aberto.':'Nenhuma venda fechada ainda.'}</td></tr>`}
         </tbody>
       </table>
     </div>
   `;
 }
 
+let salesView = 'all';
+function setSalesView(v){ salesView = v; render(); }
+
+function saleClassOptionsHtml(courseId, selectedId){
+  const list = classesOfCourse(courseId);
+  if(!list.length) return '<option value="">Sem turma definida</option>';
+  return '<option value="">Sem turma definida</option>' + list.map(c=>{
+    const qty = classSales(c.id).length, cap = Number(c.capacity||0);
+    const lot = cap>0 && qty>=cap && c.id!==selectedId;
+    return `<option value="${c.id}" ${selectedId===c.id?'selected':''}>${escapeHtml(classLabel(c))}${cap?` — ${qty}/${cap} vagas${lot?' (lotada)':''}`:''}</option>`;
+  }).join('');
+}
+
 function openSaleModal(id){
   editing = id ? state.sales.find(s=>s.id===id) : null;
-  const s = editing || {studentName:'',leadId:'',courseId:state.courses[0]?.id||'',closerId:state.closers[0]?.id||'',value:'',paymentMethod:state.paymentMethods[0]?.id||'',date:new Date().toISOString().slice(0,10)};
+  const today = new Date().toISOString().slice(0,10);
+  const s = editing || {studentName:'',leadId:'',courseId:state.courses[0]?.id||'',classId:'',closerId:state.closers[0]?.id||'',value:'',listPrice:'',paymentMethod:state.paymentMethods[0]?.id||'',date:today,notes:''};
+  const listPrice = (s.listPrice!=null && s.listPrice!=='') ? s.listPrice : (state.courses.find(c=>c.id===s.courseId)?.price ?? '');
+  const payOpts = sel => state.paymentMethods.map(p=>`<option value="${p.id}" ${sel===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('');
+  document.getElementById('modal').classList.add('wide');
   document.getElementById('modal').innerHTML = `
     <h3>${editing?'Editar venda':'Nova venda'}</h3>
     <div class="field"><label class="field-label">Buscar lead (preenche nome e curso)</label><select id="f-lead" onchange="fillFromLead(this.value)"><option value="">Digitar nome manualmente...</option>${state.leads.map(l=>`<option value="${l.id}" ${s.leadId===l.id?'selected':''}>${escapeHtml(l.name)} — ${(l.courseIds||[]).map(courseName).join(', ')||'sem curso'}</option>`).join('')}</select></div>
     <div class="field"><label class="field-label">Nome da aluna</label><input id="f-name" value="${escapeHtml(s.studentName)}" placeholder="Nome de quem comprou"></div>
-    <div class="field"><label class="field-label">Curso</label><select id="f-course">${state.courses.map(c=>`<option value="${c.id}" ${s.courseId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('') || '<option value="">Cadastre um curso</option>'}</select></div>
+    <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
+      <div class="field"><label class="field-label">Curso</label><select id="f-course" onchange="onSaleCourseChange()">${state.courses.map(c=>`<option value="${c.id}" ${s.courseId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('') || '<option value="">Cadastre um curso</option>'}</select></div>
+      <div class="field"><label class="field-label">Turma</label><select id="f-class" onchange="onSaleClassChange()">${saleClassOptionsHtml(s.courseId, s.classId)}</select></div>
+    </div>
     <div class="field"><label class="field-label">Closer</label><select id="f-closer">${state.closers.map(c=>`<option value="${c.id}" ${s.closerId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('') || '<option value="">Cadastre um closer</option>'}</select></div>
-    <div class="field"><label class="field-label">Valor (R$)</label><input type="number" step="0.01" id="f-value" value="${s.value}" placeholder="0,00"></div>
-    <div class="field"><label class="field-label">Forma de pagamento</label><select id="f-payment">${state.paymentMethods.map(p=>`<option value="${p.id}" ${s.paymentMethod===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select></div>
-    <div class="field"><label class="field-label">Data da venda</label><input type="date" id="f-date" value="${s.date}"></div>
+    <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
+      <div class="field"><label class="field-label">Preço de tabela (R$)</label><input type="number" step="0.01" id="f-list-price" value="${listPrice}" placeholder="0,00" oninput="updateSaleDiscount()"></div>
+      <div class="field"><label class="field-label">Valor negociado (R$)</label><input type="number" step="0.01" id="f-value" value="${s.value}" placeholder="0,00" oninput="updateSaleDiscount();if(editing)refreshSalePayments(editing.id)"></div>
+    </div>
+    <div class="sale-hint" id="sale-discount"></div>
+    <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
+      <div class="field"><label class="field-label">Forma de pagamento combinada</label><select id="f-payment">${payOpts(s.paymentMethod)}</select></div>
+      <div class="field"><label class="field-label">Data da venda</label><input type="date" id="f-date" value="${s.date}"></div>
+    </div>
+    <div class="field"><label class="field-label">Observações</label><textarea id="f-notes" rows="2" placeholder="ex: vendido no evento presencial, restante até o dia do curso">${escapeHtml(s.notes||'')}</textarea></div>
+    ${editing ? `
+    <div class="section-head" style="margin-top:6px;margin-bottom:6px;"><h3 style="font-size:15px;">Pagamentos</h3></div>
+    <div id="sale-payments">${salePaymentsSectionHtml(editing.id)}</div>
+    ` : `
+    <div class="section-head" style="margin-top:6px;margin-bottom:6px;"><h3 style="font-size:15px;">Pagamento inicial (sinal)</h3></div>
+    <div class="pay-add" style="margin-bottom:6px;">
+      <div><label>Valor pago agora</label><input type="number" step="0.01" id="f-first-amount" placeholder="0,00"></div>
+      <div><label>Data</label><input type="date" id="f-first-date" value="${today}"></div>
+      <div><label>Forma</label><select id="f-first-method">${payOpts(s.paymentMethod)}</select></div>
+      <div><label>Obs.</label><input id="f-first-notes" placeholder="ex: sinal no evento"></div>
+    </div>
+    <p class="sale-hint" style="margin:6px 0 0;">Deixe em branco se nada foi pago ainda. Os próximos pagamentos são registrados abrindo a venda.</p>
+    `}
     <div class="modal-actions">
       <button onclick="closeModal()">Cancelar</button>
       <button class="primary" onclick="saveSale()">Salvar</button>
     </div>`;
+  updateSaleDiscount();
   openModal();
+}
+
+function onSaleCourseChange(){
+  const courseId = document.getElementById('f-course').value;
+  document.getElementById('f-class').innerHTML = saleClassOptionsHtml(courseId, '');
+  onSaleClassChange();
+}
+function onSaleClassChange(){
+  const courseId = document.getElementById('f-course').value;
+  const cls = classById(document.getElementById('f-class').value);
+  const price = cls ? classPrice(cls) : (state.courses.find(c=>c.id===courseId)?.price ?? null);
+  const lp = document.getElementById('f-list-price');
+  if(price!=null) lp.value = price;
+  updateSaleDiscount();
+}
+function updateSaleDiscount(){
+  const el = document.getElementById('sale-discount'); if(!el) return;
+  const list = parseFloat(document.getElementById('f-list-price').value)||0;
+  const val = parseFloat(document.getElementById('f-value').value)||0;
+  if(list>0 && val>0 && list>val){
+    el.textContent = `Desconto concedido: ${fmtCurrency(list-val)} (${Math.round((list-val)/list*100)}%)`;
+  } else if(list>0 && val>list){
+    el.textContent = `Valor negociado acima do preço de tabela em ${fmtCurrency(val-list)}.`;
+  } else el.textContent = '';
+}
+
+function salePaymentsSectionHtml(saleId, totalOverride){
+  const sale = state.sales.find(s=>s.id===saleId); if(!sale) return '';
+  const total = totalOverride!=null ? totalOverride : Number(sale.value||0);
+  const pays = salePayments(saleId);
+  const paid = pays.reduce((a,p)=>a+Number(p.amount||0),0);
+  const open = Math.max(0, total-paid);
+  const today = new Date().toISOString().slice(0,10);
+  return `
+    <div class="pay-summary">
+      <div class="box"><div class="label">Negociado</div><div class="val gold">${fmtCurrency(total)}</div></div>
+      <div class="box"><div class="label">Pago</div><div class="val ${paid>=total-0.005&&total>0?'ok':''}">${fmtCurrency(paid)}</div></div>
+      <div class="box"><div class="label">Em aberto</div><div class="val ${open>0?'danger':'ok'}">${fmtCurrency(open)}</div></div>
+    </div>
+    ${paid>total+0.005 ? `<p class="sale-hint" style="margin:0 0 8px;color:var(--danger);">Atenção: o total pago está ${fmtCurrency(paid-total)} acima do valor negociado.</p>` : ''}
+    <div class="pay-list">
+      <table>
+        <thead><tr><th>Data</th><th>Valor</th><th>Forma</th><th>Obs.</th><th></th></tr></thead>
+        <tbody>
+        ${pays.length ? pays.map(p=>`
+          <tr>
+            <td class="mono">${fmtDate(p.date)}</td>
+            <td class="mono" style="font-weight:600;color:var(--ink);">${fmtCurrency(p.amount)}</td>
+            <td>${escapeHtml(paymentName(p.paymentMethod))}</td>
+            <td style="font-size:12px;color:var(--ink-soft);">${escapeHtml(p.notes||'')}</td>
+            <td style="text-align:right;"><button type="button" class="danger-ghost" onclick="removeSalePayment('${p.id}')">Remover</button></td>
+          </tr>`).join('') : `<tr class="empty-row"><td colspan="5" style="padding:14px;">Nenhum pagamento registrado.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+    <div class="pay-add">
+      <div><label>Valor</label><input type="number" step="0.01" id="f-pay-amount" placeholder="0,00" value="${open>0?open.toFixed(2):''}"></div>
+      <div><label>Data</label><input type="date" id="f-pay-date" value="${today}"></div>
+      <div><label>Forma</label><select id="f-pay-method">${state.paymentMethods.map(p=>`<option value="${p.id}" ${sale.paymentMethod===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select></div>
+      <div><label>Obs.</label><input id="f-pay-notes" placeholder="ex: 2ª parcela"></div>
+      <div><button type="button" class="primary" onclick="addSalePayment('${saleId}')">Registrar</button></div>
+    </div>
+    <p class="sale-hint" style="margin:6px 0 0;">Pagamentos são gravados na hora, independente do botão Salvar.</p>
+  `;
+}
+function refreshSalePayments(saleId){
+  const el = document.getElementById('sale-payments');
+  if(!el) return;
+  const valEl = document.getElementById('f-value');
+  el.innerHTML = salePaymentsSectionHtml(saleId, valEl ? (parseFloat(valEl.value)||0) : null);
+}
+async function addSalePayment(saleId){
+  const amount = parseFloat(document.getElementById('f-pay-amount').value)||0;
+  if(amount<=0){ alert('Informe o valor pago.'); return; }
+  const p = { id: uid(), saleId, amount, date: document.getElementById('f-pay-date').value||null,
+    paymentMethod: document.getElementById('f-pay-method').value||null, notes: document.getElementById('f-pay-notes').value.trim() };
+  const {error} = await sb.from('sale_payments').insert({id:p.id, sale_id:p.saleId, amount:p.amount, date:p.date, payment_method:p.paymentMethod, notes:p.notes||null});
+  if(error){ alert('Erro ao registrar pagamento: '+error.message); return; }
+  state.salePayments.push(p);
+  refreshSalePayments(saleId);
+}
+async function removeSalePayment(paymentId){
+  const p = state.salePayments.find(x=>x.id===paymentId); if(!p) return;
+  if(!confirm(`Remover o pagamento de ${fmtCurrency(p.amount)} de ${fmtDate(p.date)}?`)) return;
+  const {error} = await sb.from('sale_payments').delete().eq('id', paymentId);
+  if(error){ alert('Erro ao remover pagamento: '+error.message); return; }
+  state.salePayments = state.salePayments.filter(x=>x.id!==paymentId);
+  refreshSalePayments(p.saleId);
 }
 
 function fillFromLead(leadId){
@@ -1164,7 +1373,7 @@ function fillFromLead(leadId){
   const lead = state.leads.find(l=>l.id===leadId);
   if(!lead) return;
   document.getElementById('f-name').value = lead.name;
-  if(lead.courseIds && lead.courseIds.length===1) document.getElementById('f-course').value = lead.courseIds[0];
+  if(lead.courseIds && lead.courseIds.length===1){ document.getElementById('f-course').value = lead.courseIds[0]; onSaleCourseChange(); }
 }
 
 async function saveSale(){
@@ -1172,20 +1381,40 @@ async function saveSale(){
   const value = parseFloat(document.getElementById('f-value').value)||0;
   if(!studentName){ alert('Informe o nome da aluna.'); return; }
   const leadId = document.getElementById('f-lead').value;
+  const classId = document.getElementById('f-class').value || '';
+  const listPriceRaw = document.getElementById('f-list-price').value;
+  const cls = classById(classId);
+  if(cls && Number(cls.capacity||0)>0 && (!editing || editing.classId!==classId)){
+    const qty = classSales(classId).length;
+    if(qty>=Number(cls.capacity) && !confirm(`A turma "${classLabel(cls)}" já está lotada (${qty}/${cls.capacity} vagas). Registrar a venda mesmo assim?`)) return;
+  }
   const data = {
     id: editing ? editing.id : uid(),
     studentName, leadId: leadId||null,
     courseId: document.getElementById('f-course').value,
+    classId,
     closerId: document.getElementById('f-closer').value,
-    value, paymentMethod: document.getElementById('f-payment').value,
+    value, listPrice: listPriceRaw==='' ? null : (parseFloat(listPriceRaw)||0),
+    paymentMethod: document.getElementById('f-payment').value,
     date: document.getElementById('f-date').value,
+    notes: document.getElementById('f-notes').value.trim(),
   };
   const {error} = await sb.from('sales').upsert({
-    id:data.id, student_name:data.studentName, lead_id:data.leadId, course_id:data.courseId||null,
-    closer_id:data.closerId||null, value:data.value, payment_method:data.paymentMethod||null, date:data.date||null,
+    id:data.id, student_name:data.studentName, lead_id:data.leadId, course_id:data.courseId||null, class_id:data.classId||null,
+    closer_id:data.closerId||null, value:data.value, list_price:data.listPrice, payment_method:data.paymentMethod||null, date:data.date||null, notes:data.notes||null,
   });
   if(error){ alert('Erro ao salvar venda: '+error.message); return; }
   if(editing){ Object.assign(editing, data); } else { state.sales.push(data); }
+  if(!editing){
+    const firstAmount = parseFloat(document.getElementById('f-first-amount').value)||0;
+    if(firstAmount>0){
+      const p = { id: uid(), saleId: data.id, amount: firstAmount, date: document.getElementById('f-first-date').value||data.date||null,
+        paymentMethod: document.getElementById('f-first-method').value||null, notes: document.getElementById('f-first-notes').value.trim() };
+      const {error: pErr} = await sb.from('sale_payments').insert({id:p.id, sale_id:p.saleId, amount:p.amount, date:p.date, payment_method:p.paymentMethod, notes:p.notes||null});
+      if(pErr) alert('A venda foi salva, mas houve erro ao registrar o pagamento inicial: '+pErr.message);
+      else state.salePayments.push(p);
+    }
+  }
   if(leadId){
     const lead = state.leads.find(l=>l.id===leadId);
     if(lead){ lead.status = 'Fechado'; await sb.from('leads').update({status:'Fechado'}).eq('id', leadId); }
@@ -1315,21 +1544,131 @@ function renderCourses(){
     ${toolbarHtml('Cursos','Novo curso','openCourseModal()')}
     <div class="card">
       <table>
-        <thead><tr><th>Curso</th><th>Preço padrão</th><th></th></tr></thead>
+        <thead><tr><th>Curso</th><th>Preço padrão</th><th>Turmas</th><th></th></tr></thead>
         <tbody>
-        ${state.courses.length ? state.courses.map(c=>`
+        ${state.courses.length ? state.courses.map(c=>{
+          const n = classesOfCourse(c.id).length;
+          return `
           <tr>
             <td style="font-weight:600;color:var(--ink);">${escapeHtml(c.name)}</td>
             <td class="mono">${fmtCurrency(c.price)}</td>
+            <td>${n ? `<a href="#" onclick="setCourseFilter('${c.id}');switchTab('classes');return false;" style="color:var(--teal);font-weight:600;">${n} turma${n===1?'':'s'}</a>` : '<span style="color:var(--ink-soft);">—</span>'}</td>
             <td style="text-align:right;white-space:nowrap;">
               <button class="ghost" onclick="openCourseModal('${c.id}')">Editar</button>
               <button class="danger-ghost" onclick="deleteItem('courses','${c.id}')">Excluir</button>
             </td>
-          </tr>`).join('') : `<tr class="empty-row"><td colspan="3">Cadastre o primeiro curso para começar.</td></tr>`}
+          </tr>`;}).join('') : `<tr class="empty-row"><td colspan="4">Cadastre o primeiro curso para começar.</td></tr>`}
         </tbody>
       </table>
     </div>
   `;
+}
+
+/* ---------- TURMAS ---------- */
+let classesView = 'upcoming';
+function setClassesView(v){ classesView = v; render(); }
+
+function renderClasses(){
+  const isAdmin = currentUser.role==='admin';
+  const today = new Date().toISOString().slice(0,10);
+  const all = (courseFilter==='all' ? state.classes.slice() : state.classes.filter(c=>c.courseId===courseFilter))
+    .sort((a,b)=>(a.startDate||'9999').localeCompare(b.startDate||'9999') || courseName(a.courseId).localeCompare(courseName(b.courseId),'pt-BR') || a.name.localeCompare(b.name,'pt-BR'));
+  const isPast = c => !!(c.endDate||c.startDate) && (c.endDate||c.startDate) < today;
+  const upcoming = all.filter(c=>!isPast(c));
+  const rows = classesView==='upcoming' ? upcoming : all;
+  const totCap = upcoming.reduce((a,c)=>a+Number(c.capacity||0),0);
+  const totOcc = upcoming.reduce((a,c)=>a+classSales(c.id).length,0);
+  const totFree = upcoming.reduce((a,c)=>{ const cap=Number(c.capacity||0); return a + (cap ? Math.max(0, cap-classSales(c.id).length) : 0); },0);
+  return `
+    <div class="toolbar">
+      <div class="view-toggle">
+        <button type="button" class="${classesView==='upcoming'?'active':''}" onclick="setClassesView('upcoming')">Próximas (${upcoming.length})</button>
+        <button type="button" class="${classesView==='all'?'active':''}" onclick="setClassesView('all')">Todas (${all.length})</button>
+      </div>
+      ${isAdmin ? `<button class="primary" onclick="openClassModal(null, courseFilter==='all'?'':courseFilter)"><i></i>+ Nova turma</button>` : '<div></div>'}
+    </div>
+    <div class="grid-metrics">
+      <div class="metric"><div class="label">Turmas próximas</div><div class="value mono">${upcoming.length}</div></div>
+      <div class="metric"><div class="label">Alunas matriculadas</div><div class="value teal mono">${totOcc}</div></div>
+      <div class="metric"><div class="label">Vagas disponíveis</div><div class="value ${totCap&&totFree===0?'danger':'gold'} mono">${totCap?totFree:'—'}</div></div>
+    </div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Curso</th><th>Turma</th><th>Início</th><th>Término</th><th>Preço</th><th>Vagas</th><th>Alunas</th>${isAdmin?'<th></th>':''}</tr></thead>
+        <tbody>
+        ${rows.length ? rows.map(cl=>{
+          const sales = classSales(cl.id), qty = sales.length, cap = Number(cl.capacity||0);
+          const full = cap>0 && qty>=cap, past = isPast(cl);
+          const price = classPrice(cl);
+          const aberto = sales.reduce((a,s)=>a+saleOpen(s),0);
+          return `
+          <tr style="${past?'opacity:.6;':''}">
+            <td>${escapeHtml(courseName(cl.courseId))}</td>
+            <td style="font-weight:600;color:var(--ink);">${escapeHtml(cl.name)}${past?'<div style="font-size:10.5px;color:var(--ink-soft);font-weight:400;">encerrada</div>':''}</td>
+            <td class="mono">${fmtDate(cl.startDate)}</td>
+            <td class="mono">${fmtDate(cl.endDate)}</td>
+            <td class="mono">${price!=null?fmtCurrency(price):'—'}${(cl.price==null||cl.price==='')?'<div style="font-size:10.5px;color:var(--ink-soft);">padrão do curso</div>':''}</td>
+            <td>${cap ? `<span class="badge ${full?'b-lotada':'b-fechado'}">${qty}/${cap}${full?' · lotada':''}</span>` : `<span class="badge b-novo">${qty} · sem limite</span>`}</td>
+            <td>${qty ? `<details class="class-students"><summary>ver ${qty} aluna${qty===1?'':'s'}${aberto>0?` · ${fmtCurrency(aberto)} em aberto`:''}</summary><ul>${sales.map(s=>{ const st=salePayStatus(s); return `<li>${escapeHtml(s.studentName)} <span class="badge ${st.cls}" style="font-size:10px;padding:1px 6px;">${st.label}${st.label!=='Quitado'?' · '+fmtCurrency(saleOpen(s)):''}</span></li>`; }).join('')}</ul></details>` : '<span style="color:var(--ink-soft);">—</span>'}</td>
+            ${isAdmin ? `<td style="text-align:right;white-space:nowrap;">
+              <button class="ghost" onclick="openClassModal('${cl.id}')">Editar</button>
+              <button class="danger-ghost" onclick="deleteItem('classes','${cl.id}')">Excluir</button>
+            </td>` : ''}
+          </tr>`;}).join('') : `<tr class="empty-row"><td colspan="${isAdmin?8:7}">${classesView==='upcoming'?'Nenhuma turma próxima.':'Nenhuma turma cadastrada.'}${isAdmin?' Clique em "Nova turma" para cadastrar.':''}</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function openClassModal(id, courseId){
+  editing = id ? state.classes.find(c=>c.id===id) : null;
+  if(!state.courses.length){ alert('Cadastre um curso antes de criar turmas.'); return; }
+  const cl = editing || {courseId: courseId||state.courses[0]?.id||'', name:'', startDate:'', endDate:'', capacity:'', price:''};
+  document.getElementById('modal').innerHTML = `
+    <h3>${editing?'Editar turma':'Nova turma'}</h3>
+    <div class="field"><label class="field-label">Curso</label><select id="f-course">${state.courses.map(c=>`<option value="${c.id}" ${cl.courseId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div>
+    <div class="field"><label class="field-label">Nome da turma</label><input id="f-name" value="${escapeHtml(cl.name)}" placeholder="ex: Turma 3 · Outubro/2026 · Presencial"></div>
+    <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
+      <div class="field"><label class="field-label">Data de início</label><input type="date" id="f-start" value="${cl.startDate||''}"></div>
+      <div class="field"><label class="field-label">Data de término</label><input type="date" id="f-end" value="${cl.endDate||''}"></div>
+    </div>
+    <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
+      <div class="field"><label class="field-label">Vagas (0 = sem limite)</label><input type="number" min="0" step="1" id="f-capacity" value="${cl.capacity||''}" placeholder="0"></div>
+      <div class="field"><label class="field-label">Preço da turma (R$)</label><input type="number" step="0.01" id="f-price" value="${cl.price==null?'':cl.price}" placeholder="vazio = preço do curso"></div>
+    </div>
+    <div class="modal-actions">
+      <button onclick="closeModal()">Cancelar</button>
+      <button class="primary" onclick="saveClass()">Salvar</button>
+    </div>`;
+  openModal();
+}
+
+async function saveClass(){
+  const name = document.getElementById('f-name').value.trim();
+  if(!name){ alert('Informe o nome da turma.'); return; }
+  const courseId = document.getElementById('f-course').value;
+  if(!courseId){ alert('Selecione o curso.'); return; }
+  const priceRaw = document.getElementById('f-price').value;
+  const data = {
+    id: editing ? editing.id : uid(),
+    courseId, name,
+    startDate: document.getElementById('f-start').value || null,
+    endDate: document.getElementById('f-end').value || null,
+    capacity: parseInt(document.getElementById('f-capacity').value,10)||0,
+    price: priceRaw==='' ? null : (parseFloat(priceRaw)||0),
+  };
+  const {error} = await sb.from('course_classes').upsert({id:data.id, course_id:data.courseId, name:data.name, start_date:data.startDate, end_date:data.endDate, capacity:data.capacity, price:data.price});
+  if(error){ alert('Erro ao salvar turma: '+error.message); return; }
+  if(editing){
+    if(editing.courseId!==data.courseId){
+      // turma mudou de curso: vendas vinculadas acompanham o curso novo
+      const moved = state.sales.filter(s=>s.classId===data.id);
+      for(const s of moved){ s.courseId = data.courseId; await sb.from('sales').update({course_id:data.courseId}).eq('id', s.id); }
+    }
+    Object.assign(editing, data);
+  } else { state.classes.push(data); }
+  closeModal(); render();
 }
 
 function openCourseModal(id){
@@ -1529,7 +1868,7 @@ async function importBackupFile(input){
   if(!parsed.users.find(u=>u.id===meBackup.id)) parsed.users.push(meBackup);
 
   try{
-    for(const table of ['student_course_history','lead_courses','meetings','sales','students','leads','users','closers','courses','payment_methods']){
+    for(const table of ['sale_payments','student_course_history','lead_courses','meetings','sales','course_classes','students','leads','users','closers','courses','payment_methods']){
       const {error} = await sb.from(table).delete().neq('id', '__none__');
       if(error) throw error;
     }
@@ -1539,6 +1878,13 @@ async function importBackupFile(input){
         template_file_path: c.templateFile ? (c.templateFile.path||null) : null,
         template_file_name: c.templateFile ? (c.templateFile.name||null) : null,
         template_file_size: c.templateFile ? (c.templateFile.size||null) : null,
+      })));
+      if(error) throw error;
+    }
+    if((parsed.classes||[]).length){
+      const {error} = await sb.from('course_classes').insert(parsed.classes.map(c=>({
+        id:c.id, course_id:c.courseId||null, name:c.name, start_date:c.startDate||null, end_date:c.endDate||null,
+        capacity:c.capacity||0, price:(c.price==null||c.price==='')?null:c.price,
       })));
       if(error) throw error;
     }
@@ -1578,8 +1924,15 @@ async function importBackupFile(input){
     }
     if((parsed.sales||[]).length){
       const {error} = await sb.from('sales').insert(parsed.sales.map(s=>({
-        id:s.id, student_name:s.studentName, lead_id:s.leadId||null, course_id:s.courseId||null,
-        closer_id:s.closerId||null, value:s.value||0, payment_method:s.paymentMethod||null, date:s.date||null,
+        id:s.id, student_name:s.studentName, lead_id:s.leadId||null, course_id:s.courseId||null, class_id:s.classId||null,
+        closer_id:s.closerId||null, value:s.value||0, list_price:(s.listPrice==null||s.listPrice==='')?null:s.listPrice,
+        payment_method:s.paymentMethod||null, date:s.date||null, notes:s.notes||null,
+      })));
+      if(error) throw error;
+    }
+    if((parsed.salePayments||[]).length){
+      const {error} = await sb.from('sale_payments').insert(parsed.salePayments.map(p=>({
+        id:p.id, sale_id:p.saleId, amount:p.amount||0, date:p.date||null, payment_method:p.paymentMethod||null, notes:p.notes||null,
       })));
       if(error) throw error;
     }
@@ -1745,7 +2098,7 @@ async function removeContractFor(studentId, chId){
 /* ---------- generic delete / modal control ---------- */
 const TABLE_BY_COLLECTION = {
   students:'students', leads:'leads', meetings:'meetings', sales:'sales',
-  closers:'closers', courses:'courses', paymentMethods:'payment_methods',
+  closers:'closers', courses:'courses', paymentMethods:'payment_methods', classes:'course_classes',
 };
 
 async function deleteItem(collection, id){
@@ -1759,12 +2112,22 @@ async function deleteItem(collection, id){
   if(collection==='leads'){
     state.meetings = state.meetings.filter(m=>m.leadId!==id);
   }
+  if(collection==='sales'){
+    state.salePayments = state.salePayments.filter(p=>p.saleId!==id);
+  }
+  if(collection==='classes'){
+    state.sales.forEach(s=>{ if(s.classId===id) s.classId=''; });
+  }
+  if(collection==='courses'){
+    state.classes = state.classes.filter(c=>c.courseId!==id);
+    state.sales.forEach(s=>{ if(s.courseId===id) s.classId=''; });
+  }
   state[collection] = state[collection].filter(x=>x.id!==id);
   render();
 }
 
 function openModal(){ document.getElementById('modal-overlay').classList.add('open'); }
-function closeModal(){ document.getElementById('modal-overlay').classList.remove('open'); editing=null; }
+function closeModal(){ document.getElementById('modal-overlay').classList.remove('open'); document.getElementById('modal').classList.remove('wide'); editing=null; }
 let overlayMouseDownOnBackdrop = false;
 document.getElementById('modal-overlay').addEventListener('mousedown', e=>{ overlayMouseDownOnBackdrop = (e.target.id==='modal-overlay'); });
 document.getElementById('modal-overlay').addEventListener('click', e=>{ if(e.target.id==='modal-overlay' && overlayMouseDownOnBackdrop) closeModal(); });
