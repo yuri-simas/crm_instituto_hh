@@ -379,6 +379,18 @@ function classesOfCourse(courseId){
   return state.classes.filter(c=>c.courseId===courseId).sort((a,b)=>(a.startDate||'9999').localeCompare(b.startDate||'9999') || a.name.localeCompare(b.name,'pt-BR'));
 }
 function classSales(classId){ return state.sales.filter(s=>s.classId===classId); }
+function classMembers(classId){
+  const members = classSales(classId).map(s=>({key:'s:'+s.id, name:s.studentName, sale:s}));
+  const names = new Set(members.map(m=>(m.name||'').trim().toLowerCase()));
+  state.classEnrollments.filter(e=>e.classId===classId).forEach(e=>{
+    const st = state.students.find(x=>x.id===e.studentId); if(!st) return;
+    if(names.has((st.name||'').trim().toLowerCase())) return;
+    names.add((st.name||'').trim().toLowerCase());
+    members.push({key:'e:'+e.id, name:st.name, enrollment:e, student:st});
+  });
+  return members.sort((a,b)=>(a.name||'').localeCompare(b.name||'','pt-BR'));
+}
+function classOccupancy(classId){ return classMembers(classId).length; }
 function classPrice(cls){ if(!cls) return null; if(cls.price!=null && cls.price!=='') return Number(cls.price); const c=state.courses.find(c=>c.id===cls.courseId); return c?Number(c.price||0):null; }
 function salePayments(saleId){ return state.salePayments.filter(p=>p.saleId===saleId).sort((a,b)=>(a.date||'').localeCompare(b.date||'')); }
 function salePaid(saleId){ return salePayments(saleId).reduce((a,p)=>a+Number(p.amount||0),0); }
@@ -407,6 +419,7 @@ function defaultState(){
     users: [],
     classes: [],
     salePayments: [],
+    classEnrollments: [],
   };
 }
 
@@ -421,7 +434,7 @@ async function rowToHistory(h){
 
 async function loadState(){
   try{
-    const [coursesR, paymentsR, closersR, usersR, leadsR, leadCoursesR, meetingsR, salesR, studentsR, historyR, classesR, salePaymentsR] = await Promise.all([
+    const [coursesR, paymentsR, closersR, usersR, leadsR, leadCoursesR, meetingsR, salesR, studentsR, historyR, classesR, salePaymentsR, enrollmentsR] = await Promise.all([
       sb.from('courses').select('*'),
       sb.from('payment_methods').select('*'),
       sb.from('closers').select('*'),
@@ -434,8 +447,9 @@ async function loadState(){
       sb.from('student_course_history').select('*'),
       sb.from('course_classes').select('*'),
       sb.from('sale_payments').select('*'),
+      sb.from('class_enrollments').select('*'),
     ]);
-    const results = [coursesR,paymentsR,closersR,usersR,leadsR,leadCoursesR,meetingsR,salesR,studentsR,historyR,classesR,salePaymentsR];
+    const results = [coursesR,paymentsR,closersR,usersR,leadsR,leadCoursesR,meetingsR,salesR,studentsR,historyR,classesR,salePaymentsR,enrollmentsR];
     const firstError = results.find(r=>r.error);
     if(firstError) throw firstError.error;
 
@@ -455,6 +469,7 @@ async function loadState(){
       sales: salesR.data.map(r=>({id:r.id, studentName:r.student_name, leadId:r.lead_id, courseId:r.course_id, classId:r.class_id||'', closerId:r.closer_id, value:r.value, listPrice:r.list_price, paymentMethod:r.payment_method, date:r.date, notes:r.notes||''})),
       classes: classesR.data.map(r=>({id:r.id, courseId:r.course_id, name:r.name, startDate:r.start_date, endDate:r.end_date, capacity:r.capacity||0, price:r.price})),
       salePayments: salePaymentsR.data.map(r=>({id:r.id, saleId:r.sale_id, amount:r.amount, date:r.date, paymentMethod:r.payment_method, notes:r.notes||''})),
+      classEnrollments: enrollmentsR.data.map(r=>({id:r.id, classId:r.class_id, studentId:r.student_id, notes:r.notes||''})),
       students: await Promise.all(studentsR.data.map(async r=>({
         id:r.id, name:r.name, phone:r.phone, email:r.email, cpf:r.cpf, professionalRegistration:r.professional_registration, cep:r.cep, address:r.address,
         courseHistory: await Promise.all(historyR.data.filter(h=>h.student_id===r.id).map(rowToHistory)),
@@ -1227,7 +1242,7 @@ function saleClassOptionsHtml(courseId, selectedId){
   const list = classesOfCourse(courseId);
   if(!list.length) return '<option value="">Sem turma definida</option>';
   return '<option value="">Sem turma definida</option>' + list.map(c=>{
-    const qty = classSales(c.id).length, cap = Number(c.capacity||0);
+    const qty = classOccupancy(c.id), cap = Number(c.capacity||0);
     const lot = cap>0 && qty>=cap && c.id!==selectedId;
     return `<option value="${c.id}" ${selectedId===c.id?'selected':''}>${escapeHtml(classLabel(c))}${cap?` — ${qty}/${cap} vagas${lot?' (lotada)':''}`:''}</option>`;
   }).join('');
@@ -1385,7 +1400,7 @@ async function saveSale(){
   const listPriceRaw = document.getElementById('f-list-price').value;
   const cls = classById(classId);
   if(cls && Number(cls.capacity||0)>0 && (!editing || editing.classId!==classId)){
-    const qty = classSales(classId).length;
+    const qty = classOccupancy(classId);
     if(qty>=Number(cls.capacity) && !confirm(`A turma "${classLabel(cls)}" já está lotada (${qty}/${cls.capacity} vagas). Registrar a venda mesmo assim?`)) return;
   }
   const data = {
@@ -1577,8 +1592,8 @@ function renderClasses(){
   const upcoming = all.filter(c=>!isPast(c));
   const rows = classesView==='upcoming' ? upcoming : all;
   const totCap = upcoming.reduce((a,c)=>a+Number(c.capacity||0),0);
-  const totOcc = upcoming.reduce((a,c)=>a+classSales(c.id).length,0);
-  const totFree = upcoming.reduce((a,c)=>{ const cap=Number(c.capacity||0); return a + (cap ? Math.max(0, cap-classSales(c.id).length) : 0); },0);
+  const totOcc = upcoming.reduce((a,c)=>a+classOccupancy(c.id),0);
+  const totFree = upcoming.reduce((a,c)=>{ const cap=Number(c.capacity||0); return a + (cap ? Math.max(0, cap-classOccupancy(c.id)) : 0); },0);
   return `
     <div class="toolbar">
       <div class="view-toggle">
@@ -1597,10 +1612,10 @@ function renderClasses(){
         <thead><tr><th>Curso</th><th>Turma</th><th>Início</th><th>Término</th><th>Preço</th><th>Vagas</th><th>Alunas</th>${isAdmin?'<th></th>':''}</tr></thead>
         <tbody>
         ${rows.length ? rows.map(cl=>{
-          const sales = classSales(cl.id), qty = sales.length, cap = Number(cl.capacity||0);
+          const members = classMembers(cl.id), qty = members.length, cap = Number(cl.capacity||0);
           const full = cap>0 && qty>=cap, past = isPast(cl);
           const price = classPrice(cl);
-          const aberto = sales.reduce((a,s)=>a+saleOpen(s),0);
+          const aberto = members.reduce((a,m)=>a+(m.sale?saleOpen(m.sale):0),0);
           return `
           <tr style="${past?'opacity:.6;':''}">
             <td>${escapeHtml(courseName(cl.courseId))}</td>
@@ -1609,7 +1624,7 @@ function renderClasses(){
             <td class="mono">${fmtDate(cl.endDate)}</td>
             <td class="mono">${price!=null?fmtCurrency(price):'—'}${(cl.price==null||cl.price==='')?'<div style="font-size:10.5px;color:var(--ink-soft);">padrão do curso</div>':''}</td>
             <td>${cap ? `<span class="badge ${full?'b-lotada':'b-fechado'}">${qty}/${cap}${full?' · lotada':''}</span>` : `<span class="badge b-novo">${qty} · sem limite</span>`}</td>
-            <td>${qty ? `<details class="class-students"><summary>ver ${qty} aluna${qty===1?'':'s'}${aberto>0?` · ${fmtCurrency(aberto)} em aberto`:''}</summary><ul>${sales.map(s=>{ const st=salePayStatus(s); return `<li>${escapeHtml(s.studentName)} <span class="badge ${st.cls}" style="font-size:10px;padding:1px 6px;">${st.label}${st.label!=='Quitado'?' · '+fmtCurrency(saleOpen(s)):''}</span></li>`; }).join('')}</ul></details>` : '<span style="color:var(--ink-soft);">—</span>'}</td>
+            <td>${qty ? `<details class="class-students"><summary>ver ${qty} aluna${qty===1?'':'s'}${aberto>0?` · ${fmtCurrency(aberto)} em aberto`:''}</summary><ul>${members.map(m=>{ if(!m.sale) return `<li>${escapeHtml(m.name)} <span class="badge b-novo" style="font-size:10px;padding:1px 6px;">Manual</span></li>`; const st=salePayStatus(m.sale); return `<li>${escapeHtml(m.name)} <span class="badge ${st.cls}" style="font-size:10px;padding:1px 6px;">${st.label}${st.label!=='Quitado'?' · '+fmtCurrency(saleOpen(m.sale)):''}</span></li>`; }).join('')}</ul></details>` : '<span style="color:var(--ink-soft);">—</span>'}</td>
             ${isAdmin ? `<td style="text-align:right;white-space:nowrap;">
               <button class="ghost" onclick="openClassModal('${cl.id}')">Editar</button>
               <button class="danger-ghost" onclick="deleteItem('classes','${cl.id}')">Excluir</button>
@@ -1637,11 +1652,108 @@ function openClassModal(id, courseId){
       <div class="field"><label class="field-label">Vagas (0 = sem limite)</label><input type="number" min="0" step="1" id="f-capacity" value="${cl.capacity||''}" placeholder="0"></div>
       <div class="field"><label class="field-label">Preço da turma (R$)</label><input type="number" step="0.01" id="f-price" value="${cl.price==null?'':cl.price}" placeholder="vazio = preço do curso"></div>
     </div>
+    ${editing ? `<div id="class-members">${classMembersSectionHtml(editing.id)}</div>`
+              : `<p class="sale-hint" style="margin:0 0 6px;">Salve a turma para começar a adicionar alunas.</p>`}
     <div class="modal-actions">
       <button onclick="closeModal()">Cancelar</button>
       <button class="primary" onclick="saveClass()">Salvar</button>
     </div>`;
+  if(editing) document.getElementById('modal').classList.add('wide');
   openModal();
+}
+
+function classMembersSectionHtml(classId){
+  const cl = classById(classId); if(!cl) return '';
+  const members = classMembers(classId), cap = Number(cl.capacity||0);
+  const inClass = new Set(members.map(m=>(m.name||'').trim().toLowerCase()));
+  const looseSales = state.sales.filter(s=>s.courseId===cl.courseId && !s.classId && !inClass.has((s.studentName||'').trim().toLowerCase()));
+  const freeStudents = state.students.filter(st=>!inClass.has((st.name||'').trim().toLowerCase())).sort((a,b)=>a.name.localeCompare(b.name,'pt-BR'));
+  return `
+    <div class="section-head" style="margin-top:6px;margin-bottom:8px;"><h3 style="font-size:15px;">Alunas na turma <span style="color:var(--ink-soft);font-weight:400;">(${members.length}${cap?'/'+cap:''})</span></h3></div>
+    <div class="pay-list">
+      <table>
+        <thead><tr><th>Aluna</th><th>Origem</th><th></th></tr></thead>
+        <tbody>
+        ${members.length ? members.map(m=>{
+          let origem;
+          if(m.sale){ const st=salePayStatus(m.sale); origem = `Venda · <span class="badge ${st.cls}" style="font-size:10px;padding:1px 6px;">${st.label}${st.label!=='Quitado'?' · '+fmtCurrency(saleOpen(m.sale)):''}</span>`; }
+          else origem = `<span class="badge b-novo" style="font-size:10px;padding:1px 6px;">Manual</span>`;
+          return `<tr>
+            <td style="font-weight:600;color:var(--ink);">${escapeHtml(m.name)}</td>
+            <td>${origem}</td>
+            <td style="text-align:right;"><button type="button" class="danger-ghost" onclick="removeClassMember('${classId}','${m.key}')">Remover</button></td>
+          </tr>`;}).join('') : `<tr class="empty-row"><td colspan="3" style="padding:14px;">Nenhuma aluna nesta turma.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+    <div class="pay-add" style="grid-template-columns:1fr auto;">
+      <div><label>Adicionar aluna</label>
+        <select id="f-member" onchange="document.getElementById('f-member-new').style.display=this.value==='__new__'?'block':'none'">
+          <option value="">Selecione...</option>
+          ${looseSales.length ? `<optgroup label="Vendas deste curso sem turma">${looseSales.map(s=>`<option value="s:${s.id}">${escapeHtml(s.studentName)} — ${fmtCurrency(s.value)} · ${salePayStatus(s).label}</option>`).join('')}</optgroup>` : ''}
+          ${freeStudents.length ? `<optgroup label="Alunas cadastradas (matrícula manual)">${freeStudents.map(st=>`<option value="st:${st.id}">${escapeHtml(st.name)}</option>`).join('')}</optgroup>` : ''}
+          <option value="__new__">+ Nova aluna (digitar nome)</option>
+        </select>
+      </div>
+      <div><button type="button" class="primary" onclick="addClassMember('${classId}')">Adicionar</button></div>
+    </div>
+    <input id="f-member-new" placeholder="Nome completo da aluna" style="display:none;margin-top:6px;width:100%;">
+    <p class="sale-hint" style="margin:6px 0 0;">Alterações na lista são gravadas na hora. Remover uma aluna que veio de venda apenas desvincula a venda da turma — a venda continua registrada.</p>
+  `;
+}
+function refreshClassMembers(classId){
+  const el = document.getElementById('class-members');
+  if(el) el.innerHTML = classMembersSectionHtml(classId);
+}
+async function addClassMember(classId){
+  const cl = classById(classId); if(!cl) return;
+  const sel = document.getElementById('f-member').value;
+  if(!sel){ alert('Selecione uma aluna.'); return; }
+  const cap = Number(cl.capacity||0);
+  if(cap>0 && classOccupancy(classId)>=cap && !confirm(`A turma já está lotada (${classOccupancy(classId)}/${cap} vagas). Adicionar mesmo assim?`)) return;
+  if(sel.startsWith('s:')){
+    const sale = state.sales.find(x=>x.id===sel.slice(2)); if(!sale) return;
+    const {error} = await sb.from('sales').update({class_id:classId}).eq('id', sale.id);
+    if(error){ alert('Erro ao vincular venda: '+error.message); return; }
+    sale.classId = classId;
+  } else {
+    let studentId;
+    if(sel==='__new__'){
+      const name = document.getElementById('f-member-new').value.trim();
+      if(!name){ alert('Digite o nome da aluna.'); return; }
+      const existing = state.students.find(st=>st.name.trim().toLowerCase()===name.toLowerCase());
+      if(existing){ studentId = existing.id; }
+      else {
+        const st = { id: uid(), name, phone:'', email:'', cpf:'', professionalRegistration:'', cep:'', address:'', courseHistory: [] };
+        const {error} = await sb.from('students').insert({id:st.id, name:st.name, phone:'', email:'', cpf:'', professional_registration:'', cep:'', address:''});
+        if(error){ alert('Erro ao cadastrar aluna: '+error.message); return; }
+        state.students.push(st); studentId = st.id;
+      }
+    } else { studentId = sel.slice(3); }
+    if(state.classEnrollments.some(e=>e.classId===classId && e.studentId===studentId)){ refreshClassMembers(classId); return; }
+    const e = { id: uid(), classId, studentId, notes:'' };
+    const {error} = await sb.from('class_enrollments').insert({id:e.id, class_id:classId, student_id:studentId, notes:null});
+    if(error){ alert('Erro ao matricular aluna: '+error.message); return; }
+    state.classEnrollments.push(e);
+  }
+  refreshClassMembers(classId);
+}
+async function removeClassMember(classId, key){
+  if(key.startsWith('s:')){
+    const sale = state.sales.find(x=>x.id===key.slice(2)); if(!sale) return;
+    if(!confirm(`Desvincular a venda de ${sale.studentName} desta turma? A venda continua registrada, apenas sem turma.`)) return;
+    const {error} = await sb.from('sales').update({class_id:null}).eq('id', sale.id);
+    if(error){ alert('Erro ao desvincular: '+error.message); return; }
+    sale.classId = '';
+  } else {
+    const e = state.classEnrollments.find(x=>x.id===key.slice(2)); if(!e) return;
+    const st = state.students.find(x=>x.id===e.studentId);
+    if(!confirm(`Remover ${st?st.name:'a aluna'} desta turma?`)) return;
+    const {error} = await sb.from('class_enrollments').delete().eq('id', e.id);
+    if(error){ alert('Erro ao remover: '+error.message); return; }
+    state.classEnrollments = state.classEnrollments.filter(x=>x.id!==e.id);
+  }
+  refreshClassMembers(classId);
 }
 
 async function saveClass(){
@@ -1868,7 +1980,7 @@ async function importBackupFile(input){
   if(!parsed.users.find(u=>u.id===meBackup.id)) parsed.users.push(meBackup);
 
   try{
-    for(const table of ['sale_payments','student_course_history','lead_courses','meetings','sales','course_classes','students','leads','users','closers','courses','payment_methods']){
+    for(const table of ['class_enrollments','sale_payments','student_course_history','lead_courses','meetings','sales','course_classes','students','leads','users','closers','courses','payment_methods']){
       const {error} = await sb.from(table).delete().neq('id', '__none__');
       if(error) throw error;
     }
@@ -1951,6 +2063,10 @@ async function importBackupFile(input){
         contract_file_size: ch.contractFile ? (ch.contractFile.size||null) : null,
       })));
       if(historyRows.length){ const {error:hErr} = await sb.from('student_course_history').insert(historyRows); if(hErr) throw hErr; }
+    }
+    if((parsed.classEnrollments||[]).length){
+      const {error} = await sb.from('class_enrollments').insert(parsed.classEnrollments.map(e=>({id:e.id, class_id:e.classId, student_id:e.studentId, notes:e.notes||null})));
+      if(error) throw error;
     }
   }catch(e){
     alert('Erro ao importar backup: '+(e.message||e)+'. Recarregando os dados para conferir o estado atual.');
@@ -2117,8 +2233,14 @@ async function deleteItem(collection, id){
   }
   if(collection==='classes'){
     state.sales.forEach(s=>{ if(s.classId===id) s.classId=''; });
+    state.classEnrollments = state.classEnrollments.filter(e=>e.classId!==id);
+  }
+  if(collection==='students'){
+    state.classEnrollments = state.classEnrollments.filter(e=>e.studentId!==id);
   }
   if(collection==='courses'){
+    const gone = new Set(state.classes.filter(c=>c.courseId===id).map(c=>c.id));
+    state.classEnrollments = state.classEnrollments.filter(e=>!gone.has(e.classId));
     state.classes = state.classes.filter(c=>c.courseId!==id);
     state.sales.forEach(s=>{ if(s.courseId===id) s.classId=''; });
   }

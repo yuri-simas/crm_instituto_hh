@@ -62,3 +62,17 @@ update sales s
 set list_price = c.price
 from courses c
 where s.course_id = c.id and s.list_price is null;
+
+-- ========== 5) MATRÍCULAS MANUAIS EM TURMA ==========
+-- Além das vendas vinculadas à turma, o admin pode matricular uma aluna manualmente (sem venda).
+create table if not exists class_enrollments (
+  id text primary key,
+  class_id text references course_classes(id) on delete cascade,
+  student_id text references students(id) on delete cascade,
+  notes text,
+  created_at timestamptz default now()
+);
+create index if not exists class_enrollments_class_id_idx on class_enrollments(class_id);
+alter table class_enrollments enable row level security;
+drop policy if exists authenticated_all on class_enrollments;
+create policy authenticated_all on class_enrollments for all to authenticated using (true) with check (true);
