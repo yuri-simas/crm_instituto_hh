@@ -121,6 +121,10 @@ tbody tr:last-child td{border-bottom:none;}
 .eye-btn:hover{color:var(--ink);background:transparent;}
 .eye-btn svg{width:15px;height:15px;}
 .price-hidden{color:var(--ink-soft);letter-spacing:1px;}
+.phone-row{display:flex;gap:6px;margin-bottom:6px;align-items:center;}
+.phone-row input{flex:1;}
+.pay-status{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;}
+.pay-status .badge{font-size:12px;padding:5px 11px;}
 
 /* metric cards */
 .grid-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:22px;}
@@ -346,6 +350,33 @@ const STATUS_COLOR = {
   'Follow up':'#B7791F','No-show':'var(--danger)','Fechado':'var(--gold)','Perdido':'#888'
 };
 
+function studentPhones(st){
+  if(!st) return [];
+  const list = Array.isArray(st.phones) && st.phones.length ? st.phones : (st.phone ? [st.phone] : []);
+  return list.map(x=>String(x||'').trim()).filter(Boolean);
+}
+function maskPhone(input){
+  let v = input.value.replace(/\D/g,'').slice(0,11);
+  if(v.length>10) v = v.replace(/(\d{2})(\d{5})(\d{4})/,'($1) $2-$3');
+  else if(v.length>6) v = v.replace(/(\d{2})(\d{4})(\d{0,4})/,'($1) $2-$3');
+  else if(v.length>2) v = v.replace(/(\d{2})(\d{0,5})/,'($1) $2');
+  input.value = v;
+}
+function phoneRowHtml(value){
+  return `<div class="phone-row"><input class="row-phone" value="${escapeHtml(value||'')}" placeholder="(00) 00000-0000" oninput="maskPhone(this)"><button type="button" class="ghost" onclick="removePhoneRow(this)" title="Remover">✕</button></div>`;
+}
+function phonesFieldHtml(phones){
+  const list = (phones&&phones.length) ? phones : [''];
+  return `<div class="field"><label class="field-label">Telefones</label>
+    <div id="f-phones">${list.map(phoneRowHtml).join('')}</div>
+    <button type="button" class="ghost" style="padding:4px 6px;" onclick="addPhoneRow()">+ adicionar telefone</button>
+  </div>`;
+}
+function addPhoneRow(value){ const box=document.getElementById('f-phones'); if(!box) return; box.insertAdjacentHTML('beforeend', phoneRowHtml(value||'')); if(!value) box.lastElementChild.querySelector('input').focus(); }
+function removePhoneRow(btn){ const box=document.getElementById('f-phones'); const row=btn.closest('.phone-row'); if(box.children.length<=1){ row.querySelector('input').value=''; return; } row.remove(); }
+function setPhoneRows(phones){ const box=document.getElementById('f-phones'); if(!box) return; box.innerHTML = ((phones&&phones.length)?phones:['']).map(phoneRowHtml).join(''); }
+function readPhoneRows(){ return Array.from(document.querySelectorAll('#f-phones .row-phone')).map(i=>i.value.trim()).filter(Boolean); }
+
 function maskDocument(input){
   let v = input.value.replace(/\D/g,'').slice(0,14);
   if(v.length<=11){
@@ -487,7 +518,7 @@ async function loadState(){
       salePayments: salePaymentsR.data.map(r=>({id:r.id, saleId:r.sale_id, amount:r.amount, date:r.date, paymentMethod:r.payment_method, notes:r.notes||''})),
       classEnrollments: enrollmentsR.data.map(r=>({id:r.id, classId:r.class_id, studentId:r.student_id, notes:r.notes||''})),
       students: await Promise.all(studentsR.data.map(async r=>({
-        id:r.id, name:r.name, phone:r.phone, email:r.email, cpf:r.cpf, professionalRegistration:r.professional_registration, cep:r.cep, address:r.address,
+        id:r.id, name:r.name, phone:r.phone, phones:(Array.isArray(r.phones)&&r.phones.length)?r.phones:(r.phone?[r.phone]:[]), email:r.email, cpf:r.cpf, professionalRegistration:r.professional_registration, cep:r.cep, address:r.address,
         courseHistory: await Promise.all(historyR.data.filter(h=>h.student_id===r.id).map(rowToHistory)),
       }))),
     };
@@ -839,7 +870,7 @@ function renderStudents(){
         ${rows.length ? rows.map(s=>`
           <tr>
             <td style="font-weight:600;color:var(--ink);">${escapeHtml(s.name)}</td>
-            <td class="mono" style="font-size:12px;">${escapeHtml(s.phone||'')}<br>${escapeHtml(s.email||'')}</td>
+            <td class="mono" style="font-size:12px;">${studentPhones(s).map(escapeHtml).join('<br>')}${studentPhones(s).length?'<br>':''}${escapeHtml(s.email||'')}</td>
             <td class="mono">${escapeHtml(s.cpf||'—')}</td>
             <td>${(s.courseHistory||[]).map(ch=>{const sale=ch.saleId?state.sales.find(x=>x.id===ch.saleId):null; const cl=sale?classById(sale.classId):null; const st=sale?salePayStatus(sale):null; return `<span class="badge ${st&&st.label!=='Quitado'?st.cls:'b-fechado'}" style="margin-right:4px;margin-bottom:4px;display:inline-block;" title="${st?escapeHtml(st.label):''}">${escapeHtml(courseName(ch.courseId))}${cl?' · '+escapeHtml(cl.name):''} · ${escapeHtml(paymentName(ch.paymentMethod))}${st&&st.label!=='Quitado'?' · '+st.label:''}</span>`;}).join('') || '—'}</td>
             <td style="text-align:right;white-space:nowrap;">
@@ -857,12 +888,12 @@ let editingCourseHistory = [];
 
 function openStudentModal(id){
   editing = id ? state.students.find(s=>s.id===id) : null;
-  const s = editing || {name:'',phone:'',email:'',cpf:'',professionalRegistration:'',cep:'',address:'',courseHistory:[]};
+  const s = editing || {name:'',phone:'',phones:[],email:'',cpf:'',professionalRegistration:'',cep:'',address:'',courseHistory:[]};
   editingCourseHistory = JSON.parse(JSON.stringify(s.courseHistory||[]));
   document.getElementById('modal').innerHTML = `
     <h3>${editing?'Editar aluna':'Nova aluna'}</h3>
     <div class="field"><label class="field-label">Nome</label><input id="f-name" value="${escapeHtml(s.name)}" placeholder="Nome completo"></div>
-    <div class="field"><label class="field-label">Telefone</label><input id="f-phone" value="${escapeHtml(s.phone)}" placeholder="(00) 00000-0000"></div>
+    ${phonesFieldHtml(studentPhones(s))}
     <div class="field"><label class="field-label">E-mail</label><input id="f-email" value="${escapeHtml(s.email)}" placeholder="nome@email.com"></div>
     <div class="field"><label class="field-label">CPF</label><input id="f-cpf" value="${escapeHtml(s.cpf||'')}" placeholder="000.000.000-00" oninput="maskCPF(this)"></div>
     <div class="field"><label class="field-label">Registro em conselho de classe (se houver)</label><input id="f-registration" value="${escapeHtml(s.professionalRegistration||'')}" placeholder="ex: COREN 123456"></div>
@@ -914,7 +945,7 @@ async function saveStudent(){
   });
   const data = {
     id: editing ? editing.id : uid(),
-    name, phone: document.getElementById('f-phone').value.trim(),
+    name, phones: readPhoneRows(), phone: (readPhoneRows()[0]||''),
     email: document.getElementById('f-email').value.trim(),
     cpf: document.getElementById('f-cpf').value.trim(),
     professionalRegistration: document.getElementById('f-registration').value.trim(),
@@ -923,7 +954,7 @@ async function saveStudent(){
     courseHistory
   };
   const {error: studentErr} = await sb.from('students').upsert({
-    id:data.id, name:data.name, phone:data.phone, email:data.email, cpf:data.cpf,
+    id:data.id, name:data.name, phone:data.phone, phones:data.phones, email:data.email, cpf:data.cpf,
     professional_registration:data.professionalRegistration, cep:data.cep, address:data.address,
   });
   if(studentErr){ alert('Erro ao salvar aluna: '+studentErr.message); return; }
@@ -1289,7 +1320,8 @@ function openSaleModal(id){
   document.getElementById('modal').innerHTML = `
     <h3>${editing?'Editar venda':'Nova venda'}</h3>
     <div class="field"><label class="field-label">Buscar lead (preenche nome e curso)</label><select id="f-lead" onchange="fillFromLead(this.value)"><option value="">Digitar nome manualmente...</option>${state.leads.map(l=>`<option value="${l.id}" ${s.leadId===l.id?'selected':''}>${escapeHtml(l.name)} — ${(l.courseIds||[]).map(courseName).join(', ')||'sem curso'}</option>`).join('')}</select></div>
-    <div class="field"><label class="field-label">Nome da aluna</label><input id="f-name" value="${escapeHtml(s.studentName)}" placeholder="Nome de quem comprou"></div>
+    <div class="field"><label class="field-label">Nome da aluna</label><input id="f-name" value="${escapeHtml(s.studentName)}" placeholder="Nome de quem comprou" onchange="prefillPhonesFromStudent()"></div>
+    ${phonesFieldHtml(studentPhones(state.students.find(st=>st.name.trim().toLowerCase()===(s.studentName||'').trim().toLowerCase())))}
     <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
       <div class="field"><label class="field-label">Curso</label><select id="f-course" onchange="onSaleCourseChange()">${state.courses.map(c=>`<option value="${c.id}" ${s.courseId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('') || '<option value="">Cadastre um curso</option>'}</select></div>
       <div class="field"><label class="field-label">Turma</label><select id="f-class" onchange="onSaleClassChange()">${saleClassOptionsHtml(s.courseId, s.classId)}</select></div>
@@ -1379,7 +1411,17 @@ function salePaymentsSectionHtml(saleId, totalOverride){
   const paid = pays.reduce((a,p)=>a+Number(p.amount||0),0);
   const open = Math.max(0, total-paid);
   const today = new Date().toISOString().slice(0,10);
+  const quitada = total>0 && paid>=total-0.005;
+  const statusHtml = total<=0
+    ? `<span class="sale-hint" style="margin:0;color:var(--danger);">Informe o valor negociado para controlar o saldo.</span>`
+    : quitada
+      ? `<span class="badge b-quitado">✓ Quitada</span>`
+      : `<span class="badge ${paid>0?'b-parcial':'b-aberto'}">Pendente · falta ${fmtCurrency(open)}</span>`;
   return `
+    <div class="pay-status">
+      ${statusHtml}
+      ${(!quitada && total>0) ? `<button type="button" class="ghost" style="border:1px solid var(--border);" onclick="markSalePaid('${saleId}')">Marcar como quitada</button>` : ''}
+    </div>
     <div class="pay-summary">
       <div class="box"><div class="label">Negociado</div><div class="val gold">${fmtCurrency(total)}</div></div>
       <div class="box"><div class="label">Pago</div><div class="val ${paid>=total-0.005&&total>0?'ok':''}">${fmtCurrency(paid)}</div></div>
@@ -1427,6 +1469,20 @@ async function addSalePayment(saleId){
   state.salePayments.push(p);
   refreshSalePayments(saleId);
 }
+async function markSalePaid(saleId){
+  const sale = state.sales.find(s=>s.id===saleId); if(!sale) return;
+  const valEl = document.getElementById('f-value');
+  const total = valEl ? (parseFloat(valEl.value)||0) : Number(sale.value||0);
+  const open = Math.max(0, total - salePaid(saleId));
+  if(open<=0) return;
+  if(!confirm(`Registrar pagamento de ${fmtCurrency(open)} com a data de hoje e marcar a venda como quitada?`)) return;
+  const method = document.getElementById('f-pay-method')?.value || sale.paymentMethod || state.paymentMethods[0]?.id || null;
+  const p = { id: uid(), saleId, amount: open, date: new Date().toISOString().slice(0,10), paymentMethod: method, notes: 'Quitação' };
+  const {error} = await sb.from('sale_payments').insert({id:p.id, sale_id:p.saleId, amount:p.amount, date:p.date, payment_method:p.paymentMethod, notes:p.notes});
+  if(error){ alert('Erro ao registrar quitação: '+error.message); return; }
+  state.salePayments.push(p);
+  refreshSalePayments(saleId);
+}
 async function removeSalePayment(paymentId){
   const p = state.salePayments.find(x=>x.id===paymentId); if(!p) return;
   if(!confirm(`Remover o pagamento de ${fmtCurrency(p.amount)} de ${fmtDate(p.date)}?`)) return;
@@ -1436,11 +1492,22 @@ async function removeSalePayment(paymentId){
   refreshSalePayments(p.saleId);
 }
 
+function prefillPhonesFromStudent(){
+  if(readPhoneRows().length) return;
+  const name = document.getElementById('f-name').value.trim().toLowerCase();
+  const st = state.students.find(x=>x.name.trim().toLowerCase()===name);
+  if(st && studentPhones(st).length) setPhoneRows(studentPhones(st));
+}
 function fillFromLead(leadId){
   if(!leadId) return;
   const lead = state.leads.find(l=>l.id===leadId);
   if(!lead) return;
   document.getElementById('f-name').value = lead.name;
+  if(!readPhoneRows().length){
+    const st = state.students.find(x=>x.name.trim().toLowerCase()===lead.name.trim().toLowerCase());
+    const phones = st && studentPhones(st).length ? studentPhones(st) : (lead.phone ? [lead.phone] : []);
+    if(phones.length) setPhoneRows(phones);
+  }
   if(lead.courseIds && lead.courseIds.length===1){ document.getElementById('f-course').value = lead.courseIds[0]; onSaleCourseChange(); }
 }
 
@@ -1471,6 +1538,7 @@ async function saveSale(){
     date: document.getElementById('f-date').value,
     notes: document.getElementById('f-notes').value.trim(),
   };
+  const phones = readPhoneRows();
   const {error} = await sb.from('sales').upsert({
     id:data.id, student_name:data.studentName, lead_id:data.leadId, course_id:data.courseId||null, class_id:data.classId||null,
     closer_id:data.closerId||null, closer2_id:data.closer2Id||null, split_percent:data.splitPercent,
@@ -1492,23 +1560,27 @@ async function saveSale(){
     const lead = state.leads.find(l=>l.id===leadId);
     if(lead){ lead.status = 'Fechado'; await sb.from('leads').update({status:'Fechado'}).eq('id', leadId); }
   }
-  await upsertStudentFromSale(data, leadId);
+  await upsertStudentFromSale(data, leadId, phones);
   closeModal(); render();
 }
 
-async function upsertStudentFromSale(saleData, leadId){
+async function upsertStudentFromSale(saleData, leadId, phones){
   state.students.forEach(st=>{
     st.courseHistory = (st.courseHistory||[]).filter(ch=>ch.saleId!==saleData.id);
   });
   const lead = leadId ? state.leads.find(l=>l.id===leadId) : null;
   let student = state.students.find(st=>st.name.trim().toLowerCase()===saleData.studentName.trim().toLowerCase());
   let isNewStudent = false;
+  let phonesChanged = false;
   if(!student){
-    student = { id: uid(), name: saleData.studentName, phone: lead?lead.phone:'', email: '', cpf: '', professionalRegistration:'', cep:'', address:'', courseHistory: [] };
+    const initial = (phones&&phones.length) ? phones : (lead&&lead.phone ? [lead.phone] : []);
+    student = { id: uid(), name: saleData.studentName, phone: initial[0]||'', phones: initial, email: '', cpf: '', professionalRegistration:'', cep:'', address:'', courseHistory: [] };
     state.students.push(student);
     isNewStudent = true;
-  } else if(lead && !student.phone){
-    student.phone = lead.phone;
+  } else if(phones && phones.length){
+    if(JSON.stringify(studentPhones(student))!==JSON.stringify(phones)){ student.phones = phones; student.phone = phones[0]; phonesChanged = true; }
+  } else if(lead && lead.phone && !studentPhones(student).length){
+    student.phones = [lead.phone]; student.phone = lead.phone; phonesChanged = true;
   }
   if(!student.courseHistory) student.courseHistory = [];
   const historyEntry = { id: uid(), courseId: saleData.courseId, paymentMethod: saleData.paymentMethod, saleId: saleData.id, date: saleData.date, contractFile: null };
@@ -1517,12 +1589,12 @@ async function upsertStudentFromSale(saleData, leadId){
   await sb.from('student_course_history').delete().eq('sale_id', saleData.id);
   if(isNewStudent){
     const {error: stErr} = await sb.from('students').insert({
-      id:student.id, name:student.name, phone:student.phone, email:student.email, cpf:student.cpf,
+      id:student.id, name:student.name, phone:student.phone, phones:student.phones||[], email:student.email, cpf:student.cpf,
       professional_registration:student.professionalRegistration, cep:student.cep, address:student.address,
     });
     if(stErr) console.error('erro ao inserir aluna', stErr);
-  } else if(lead){
-    const {error: stErr} = await sb.from('students').update({phone:student.phone}).eq('id', student.id);
+  } else if(phonesChanged){
+    const {error: stErr} = await sb.from('students').update({phone:student.phone, phones:student.phones||[]}).eq('id', student.id);
     if(stErr) console.error('erro ao atualizar aluna', stErr);
   }
   const {error: chErr} = await sb.from('student_course_history').insert({
@@ -1782,8 +1854,8 @@ async function addClassMember(classId){
       const existing = state.students.find(st=>st.name.trim().toLowerCase()===name.toLowerCase());
       if(existing){ studentId = existing.id; }
       else {
-        const st = { id: uid(), name, phone:'', email:'', cpf:'', professionalRegistration:'', cep:'', address:'', courseHistory: [] };
-        const {error} = await sb.from('students').insert({id:st.id, name:st.name, phone:'', email:'', cpf:'', professional_registration:'', cep:'', address:''});
+        const st = { id: uid(), name, phone:'', phones:[], email:'', cpf:'', professionalRegistration:'', cep:'', address:'', courseHistory: [] };
+        const {error} = await sb.from('students').insert({id:st.id, name:st.name, phone:'', phones:[], email:'', cpf:'', professional_registration:'', cep:'', address:''});
         if(error){ alert('Erro ao cadastrar aluna: '+error.message); return; }
         state.students.push(st); studentId = st.id;
       }
@@ -2109,7 +2181,7 @@ async function importBackupFile(input){
     }
     if((parsed.students||[]).length){
       const {error} = await sb.from('students').insert(parsed.students.map(s=>({
-        id:s.id, name:s.name, phone:s.phone, email:s.email, cpf:s.cpf,
+        id:s.id, name:s.name, phone:s.phone, phones:(Array.isArray(s.phones)&&s.phones.length)?s.phones:(s.phone?[s.phone]:[]), email:s.email, cpf:s.cpf,
         professional_registration:s.professionalRegistration, cep:s.cep, address:s.address,
       })));
       if(error) throw error;

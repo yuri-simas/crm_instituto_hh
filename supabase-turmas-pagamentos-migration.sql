@@ -81,3 +81,8 @@ create policy authenticated_all on class_enrollments for all to authenticated us
 -- closer2_id: segundo closer (opcional). split_percent: parte do closer 1 em % (100 = sem divisão).
 alter table sales add column if not exists closer2_id text references closers(id) on delete set null;
 alter table sales add column if not exists split_percent numeric default 100;
+
+-- ========== 7) VÁRIOS TELEFONES POR ALUNA ==========
+-- students.phones guarda a lista; students.phone continua sendo o principal (primeiro da lista).
+alter table students add column if not exists phones text[] default '{}';
+update students set phones = array[phone] where (phones is null or cardinality(phones)=0) and coalesce(phone,'')<>'';
