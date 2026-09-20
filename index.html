@@ -1314,7 +1314,8 @@ function openSaleModal(id){
   editing = id ? state.sales.find(s=>s.id===id) : null;
   const today = new Date().toISOString().slice(0,10);
   const s = editing || {studentName:'',leadId:'',courseId:state.courses[0]?.id||'',classId:'',closerId:state.closers[0]?.id||'',closer2Id:'',splitPercent:50,value:'',listPrice:'',paymentMethod:state.paymentMethods[0]?.id||'',date:today,notes:''};
-  const listPrice = (s.listPrice!=null && s.listPrice!=='') ? s.listPrice : (state.courses.find(c=>c.id===s.courseId)?.price ?? '');
+  const listPriceCleared = editing && Number(s.listPrice)===0 && s.listPrice!=null && s.listPrice!=='';
+  const listPrice = listPriceCleared ? '' : ((s.listPrice!=null && s.listPrice!=='') ? s.listPrice : (state.courses.find(c=>c.id===s.courseId)?.price ?? ''));
   const payOpts = sel => state.paymentMethods.map(p=>`<option value="${p.id}" ${sel===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('');
   document.getElementById('modal').classList.add('wide');
   document.getElementById('modal').innerHTML = `
@@ -1338,7 +1339,7 @@ function openSaleModal(id){
       </div>
     </div>
     <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
-      <div class="field"><label class="field-label">Preço de tabela (R$)</label><input type="number" step="0.01" id="f-list-price" value="${listPrice}" placeholder="0,00" oninput="updateSaleDiscount()"></div>
+      <div class="field"><label class="field-label">Preço de tabela (R$)</label><input type="number" step="0.01" id="f-list-price" value="${listPrice}" placeholder="sem preço de tabela" data-cleared="${listPriceCleared?'1':'0'}" oninput="this.dataset.cleared=(this.value===''?'1':'0');updateSaleDiscount()"></div>
       <div class="field"><label class="field-label">Valor negociado (R$)</label><input type="number" step="0.01" id="f-value" value="${s.value}" placeholder="0,00" oninput="updateSaleDiscount();if(editing)refreshSalePayments(editing.id)"></div>
     </div>
     <div class="sale-hint" id="sale-discount"></div>
@@ -1390,7 +1391,7 @@ function onSaleClassChange(){
   const cls = classById(document.getElementById('f-class').value);
   const price = cls ? classPrice(cls) : (state.courses.find(c=>c.id===courseId)?.price ?? null);
   const lp = document.getElementById('f-list-price');
-  if(price!=null) lp.value = price;
+  if(price!=null && lp.dataset.cleared!=='1') lp.value = price;
   updateSaleDiscount();
 }
 function updateSaleDiscount(){
@@ -1543,7 +1544,7 @@ async function persistSale(){
     courseId: document.getElementById('f-course').value,
     classId,
     closerId, closer2Id, splitPercent,
-    value, listPrice: listPriceRaw==='' ? null : (parseFloat(listPriceRaw)||0),
+    value, listPrice: listPriceRaw==='' ? 0 : (parseFloat(listPriceRaw)||0),
     paymentMethod: document.getElementById('f-payment').value,
     date: document.getElementById('f-date').value,
     notes: document.getElementById('f-notes').value.trim(),
