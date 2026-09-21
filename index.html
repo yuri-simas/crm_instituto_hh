@@ -47,6 +47,12 @@ h1,h2,h3{font-family:'Fraunces',serif;font-weight:500;color:var(--ink);margin:0;
 #topbar .sub{font-size:12.5px;color:var(--ink-soft);margin-top:2px;}
 .filterbar{display:flex;align-items:center;gap:8px;}
 .filterbar label{font-size:12px;color:var(--ink-soft);}
+.sales-filters{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:flex-end;margin-bottom:14px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;}
+.sales-filters .f{display:flex;flex-direction:column;gap:4px;}
+.sales-filters .f label{font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-soft);}
+.sales-filters .f input,.sales-filters .f select{min-width:140px;}
+.sales-filters .f.grow{flex:1;min-width:200px;}
+.sales-filters .f.grow input{width:100%;}
 #content{padding:26px 28px 60px;}
 
 /* form elements */
@@ -1234,7 +1240,7 @@ async function saveMeeting(){
 
 /* ---------- SALES ---------- */
 function renderSales(){
-  const all = filteredSales();
+  const all = applySalesFilter(filteredSales());
   const totalVendido = all.reduce((a,s)=>a+Number(s.value||0),0);
   const totalRecebido = all.reduce((a,s)=>a+Math.min(Number(s.value||0), salePaid(s.id)),0);
   const totalAberto = all.reduce((a,s)=>a+saleOpen(s),0);
@@ -1248,6 +1254,7 @@ function renderSales(){
       </div>
       <button class="primary" onclick="openSaleModal()"><i></i>+ Nova venda</button>
     </div>
+    ${salesFiltersHtml()}
     <div class="grid-metrics">
       <div class="metric"><div class="label">Total vendido</div><div class="value gold mono">${fmtCurrency(totalVendido)}</div></div>
       <div class="metric"><div class="label">Recebido</div><div class="value teal mono">${fmtCurrency(totalRecebido)}</div></div>
@@ -1275,7 +1282,7 @@ function renderSales(){
               <button class="ghost" onclick="openSaleModal('${s.id}')">${open>0?'Pagamentos':'Editar'}</button>
               <button class="danger-ghost" onclick="deleteItem('sales','${s.id}')">Excluir</button>
             </td>
-          </tr>`;}).join('') : `<tr class="empty-row"><td colspan="9">${salesView==='open'?'Nenhuma venda com saldo em aberto.':'Nenhuma venda fechada ainda.'}</td></tr>`}
+          </tr>`;}).join('') : `<tr class="empty-row"><td colspan="9">${Object.values(salesFilter).some(v=>v) ? 'Nenhuma venda encontrada com esses filtros.' : (salesView==='open'?'Nenhuma venda com saldo em aberto.':'Nenhuma venda fechada ainda.')}</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -1283,6 +1290,41 @@ function renderSales(){
 }
 
 let salesView = 'all';
+let salesFilter = {name:'', classId:'', closerId:'', from:'', to:''};
+function setSalesFilter(key, value){
+  salesFilter[key] = value;
+  const el = document.getElementById('sales-f-'+key);
+  const pos = (el && el.tagName==='INPUT' && el.type==='text') ? el.selectionStart : null;
+  render();
+  const el2 = document.getElementById('sales-f-'+key);
+  if(el2 && pos!=null){ el2.focus(); el2.setSelectionRange(pos,pos); }
+}
+function clearSalesFilter(){ salesFilter = {name:'', classId:'', closerId:'', from:'', to:''}; render(); }
+function applySalesFilter(list){
+  const q = salesFilter.name.trim().toLowerCase();
+  return list.filter(s=>{
+    if(q && !(s.studentName||'').toLowerCase().includes(q)) return false;
+    if(salesFilter.classId && s.classId!==salesFilter.classId) return false;
+    if(salesFilter.closerId && s.closerId!==salesFilter.closerId && s.closer2Id!==salesFilter.closerId) return false;
+    if(salesFilter.from && (s.date||'') < salesFilter.from) return false;
+    if(salesFilter.to && (s.date||'') > salesFilter.to) return false;
+    return true;
+  });
+}
+function salesFiltersHtml(){
+  const classes = (courseFilter==='all' ? state.classes.slice() : state.classes.filter(c=>c.courseId===courseFilter))
+    .sort((a,b)=>(a.startDate||'9999').localeCompare(b.startDate||'9999'));
+  const active = Object.values(salesFilter).some(v=>v);
+  return `
+    <div class="sales-filters">
+      <div class="f grow"><label for="sales-f-name">Aluna</label><input type="text" id="sales-f-name" value="${escapeHtml(salesFilter.name)}" oninput="setSalesFilter('name', this.value)" placeholder="Buscar por nome..."></div>
+      <div class="f"><label for="sales-f-classId">Turma</label><select id="sales-f-classId" onchange="setSalesFilter('classId', this.value)"><option value="">Todas</option>${classes.map(c=>`<option value="${c.id}" ${salesFilter.classId===c.id?'selected':''}>${escapeHtml(courseFilter==='all' ? courseName(c.courseId)+' · ' : '')}${escapeHtml(classLabel(c))}</option>`).join('')}</select></div>
+      ${currentUser.role==='admin' ? `<div class="f"><label for="sales-f-closerId">Closer</label><select id="sales-f-closerId" onchange="setSalesFilter('closerId', this.value)"><option value="">Todos</option>${state.closers.map(c=>`<option value="${c.id}" ${salesFilter.closerId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div>` : ''}
+      <div class="f"><label for="sales-f-from">De</label><input type="date" id="sales-f-from" value="${salesFilter.from}" onchange="setSalesFilter('from', this.value)"></div>
+      <div class="f"><label for="sales-f-to">Até</label><input type="date" id="sales-f-to" value="${salesFilter.to}" onchange="setSalesFilter('to', this.value)"></div>
+      ${active ? `<div class="f"><label>&nbsp;</label><button type="button" class="ghost" style="border:1px solid var(--border);" onclick="clearSalesFilter()">Limpar filtros</button></div>` : ''}
+    </div>`;
+}
 
 /* ---------- ocultar preços (olhinho) ---------- */
 let pricesHidden = false;
