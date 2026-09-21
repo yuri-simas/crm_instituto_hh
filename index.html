@@ -471,7 +471,7 @@ function defaultState(){
 }
 
 async function rowToCourse(r){
-  return { id:r.id, name:r.name, price:r.price,
+  return { id:r.id, name:r.name, price:r.price, commissionPercent:Number(r.commission_percent||0),
     templateFile: r.template_file_path ? {name:r.template_file_name, size:r.template_file_size, path:r.template_file_path, dataUrl:await publicUrl(r.template_file_path)} : null };
 }
 async function rowToHistory(h){
@@ -1616,43 +1616,47 @@ async function upsertStudentFromSale(saleData, leadId, phones){
 }
 
 /* ---------- COMMISSIONS ---------- */
+function courseCommissionPct(courseId){ const c=state.courses.find(x=>x.id===courseId); return c ? Number(c.commissionPercent||0) : 0; }
+function saleCommission(sale, closerId){ return Number(sale.value||0) * saleShare(sale, closerId) * courseCommissionPct(sale.courseId) / 100; }
+
 function renderCommissions(){
   const sales = filteredSales();
+  const semPct = state.courses.filter(c=>!(Number(c.commissionPercent||0)>0));
   const rows = state.closers.map(c=>{
     const cSales = sales.filter(s=>saleShare(s,c.id)>0);
     const total = cSales.reduce((a,s)=>a+Number(s.value||0)*saleShare(s,c.id),0);
-    const base = Number(c.commissionPercent||0);
-    const threshold = Number(c.acceleratorThreshold||0);
-    const accel = Number(c.acceleratorPercent||0);
-    let commission;
-    if(threshold>0 && total>threshold && accel>0){
-      commission = threshold*(base/100) + (total-threshold)*(accel/100);
-    } else {
-      commission = total*(base/100);
-    }
-    return {c, total, commission, qty: cSales.length};
+    const commission = cSales.reduce((a,s)=>a+saleCommission(s,c.id),0);
+    const byCourse = {};
+    cSales.forEach(s=>{
+      const k = s.courseId||'';
+      if(!byCourse[k]) byCourse[k] = {courseId:k, qty:0, total:0, commission:0};
+      byCourse[k].qty++; byCourse[k].total += Number(s.value||0)*saleShare(s,c.id); byCourse[k].commission += saleCommission(s,c.id);
+    });
+    return {c, total, commission, qty: cSales.length, byCourse: Object.values(byCourse).sort((a,b)=>b.commission-a.commission)};
   });
+  const totalComissao = rows.reduce((a,r)=>a+r.commission,0);
   return `
     ${toolbarHtml('Comissionamento','Novo closer','openCloserModal()')}
-    <div class="pill-note">Comissão = percentual base sobre o total vendido. Se o acelerador estiver configurado e o total vendido ultrapassar a meta, o excedente é calculado com o percentual acelerado. Em vendas com comissão dividida, cada closer conta apenas a sua parte do valor.</div>
+    <div class="pill-note">Comissão = valor negociado da venda × percentual de comissão do <strong>curso</strong> (definido em Cursos). Em vendas com comissão dividida, cada closer recebe sobre a sua parte.${semPct.length?` <strong>Atenção:</strong> sem percentual definido: ${semPct.map(c=>escapeHtml(c.name)).join(', ')}.`:''}</div>
+    <div class="grid-metrics">
+      <div class="metric"><div class="label">Comissão total devida</div><div class="value gold mono">${fmtCurrency(totalComissao)}</div></div>
+    </div>
     <div class="card">
       <table>
-        <thead><tr><th>Closer</th><th>% base</th><th>Meta acelerador</th><th>% acelerado</th><th>Vendas</th><th>Total vendido</th><th>Comissão devida</th><th></th></tr></thead>
+        <thead><tr><th>Closer</th><th>Vendas</th><th>Total vendido (sua parte)</th><th>Comissão devida</th><th>Detalhamento por curso</th><th></th></tr></thead>
         <tbody>
         ${rows.length ? rows.map(r=>`
           <tr>
             <td style="font-weight:600;color:var(--ink);">${escapeHtml(r.c.name)}</td>
-            <td class="mono">${r.c.commissionPercent||0}%</td>
-            <td class="mono">${r.c.acceleratorThreshold?fmtCurrency(r.c.acceleratorThreshold):'—'}</td>
-            <td class="mono">${r.c.acceleratorPercent?r.c.acceleratorPercent+'%':'—'}</td>
             <td>${r.qty}</td>
             <td class="mono">${fmtCurrency(r.total)}</td>
             <td class="mono" style="color:var(--gold);font-weight:600;">${fmtCurrency(r.commission)}</td>
+            <td>${r.byCourse.length ? `<details class="class-students"><summary>ver ${r.byCourse.length} curso${r.byCourse.length===1?'':'s'}</summary><ul>${r.byCourse.map(b=>`<li>${escapeHtml(courseName(b.courseId))} · ${courseCommissionPct(b.courseId)}% · ${b.qty} venda${b.qty===1?'':'s'} · <span class="mono">${fmtCurrency(b.total)}</span> → <span class="mono" style="color:var(--gold);font-weight:600;">${fmtCurrency(b.commission)}</span></li>`).join('')}</ul></details>` : '<span style="color:var(--ink-soft);">—</span>'}</td>
             <td style="text-align:right;white-space:nowrap;">
               <button class="ghost" onclick="openCloserModal('${r.c.id}')">Editar</button>
               <button class="danger-ghost" onclick="deleteItem('closers','${r.c.id}')">Excluir</button>
             </td>
-          </tr>`).join('') : `<tr class="empty-row"><td colspan="8">Nenhum closer cadastrado ainda.</td></tr>`}
+          </tr>`).join('') : `<tr class="empty-row"><td colspan="6">Nenhum closer cadastrado ainda.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -1665,9 +1669,7 @@ function openCloserModal(id){
   document.getElementById('modal').innerHTML = `
     <h3>${editing?'Editar closer':'Novo closer'}</h3>
     <div class="field"><label class="field-label">Nome</label><input id="f-name" value="${escapeHtml(c.name)}"></div>
-    <div class="field"><label class="field-label">Percentual base de comissão (%)</label><input type="number" step="0.1" id="f-base" value="${c.commissionPercent}" placeholder="ex: 10"></div>
-    <div class="field"><label class="field-label">Meta para acelerador (R$, opcional)</label><input type="number" step="0.01" id="f-threshold" value="${c.acceleratorThreshold}" placeholder="ex: 30000"></div>
-    <div class="field"><label class="field-label">Percentual acelerado acima da meta (%, opcional)</label><input type="number" step="0.1" id="f-accel" value="${c.acceleratorPercent}" placeholder="ex: 15"></div>
+    <p class="sale-hint" style="margin:-4px 0 12px;">O percentual de comissão é definido por curso, na aba Cursos.</p>
     <div class="modal-actions">
       <button onclick="closeModal()">Cancelar</button>
       <button class="primary" onclick="saveCloser()">Salvar</button>
@@ -1681,14 +1683,11 @@ async function saveCloser(){
   const data = {
     id: editing ? editing.id : uid(),
     name,
-    commissionPercent: parseFloat(document.getElementById('f-base').value)||0,
-    acceleratorThreshold: parseFloat(document.getElementById('f-threshold').value)||0,
-    acceleratorPercent: parseFloat(document.getElementById('f-accel').value)||0,
+    commissionPercent: editing ? (editing.commissionPercent||0) : 0,
+    acceleratorThreshold: editing ? (editing.acceleratorThreshold||0) : 0,
+    acceleratorPercent: editing ? (editing.acceleratorPercent||0) : 0,
   };
-  const {error} = await sb.from('closers').upsert({
-    id:data.id, name:data.name, commission_percent:data.commissionPercent,
-    accelerator_threshold:data.acceleratorThreshold, accelerator_percent:data.acceleratorPercent,
-  });
+  const {error} = await sb.from('closers').upsert({ id:data.id, name:data.name });
   if(error){ alert('Erro ao salvar closer: '+error.message); return; }
   if(editing){ Object.assign(editing, data); } else { state.closers.push(data); }
   closeModal(); render();
@@ -1700,7 +1699,7 @@ function renderCourses(){
     ${toolbarHtml('Cursos','Novo curso','openCourseModal()')}
     <div class="card">
       <table>
-        <thead><tr><th>Curso</th><th style="white-space:nowrap;">Preço padrão ${eyeBtnHtml()}</th><th>Turmas</th><th></th></tr></thead>
+        <thead><tr><th>Curso</th><th style="white-space:nowrap;">Preço padrão ${eyeBtnHtml()}</th><th>Comissão</th><th>Turmas</th><th></th></tr></thead>
         <tbody>
         ${state.courses.length ? state.courses.map(c=>{
           const n = classesOfCourse(c.id).length;
@@ -1708,12 +1707,13 @@ function renderCourses(){
           <tr>
             <td style="font-weight:600;color:var(--ink);">${escapeHtml(c.name)}</td>
             <td class="mono">${fmtPrice(c.price)}</td>
+            <td class="mono">${Number(c.commissionPercent||0)>0 ? c.commissionPercent+'%' : '<span style="color:var(--ink-soft);">—</span>'}</td>
             <td>${n ? `<a href="#" onclick="setCourseFilter('${c.id}');switchTab('classes');return false;" style="color:var(--teal);font-weight:600;">${n} turma${n===1?'':'s'}</a>` : '<span style="color:var(--ink-soft);">—</span>'}</td>
             <td style="text-align:right;white-space:nowrap;">
               <button class="ghost" onclick="openCourseModal('${c.id}')">Editar</button>
               <button class="danger-ghost" onclick="deleteItem('courses','${c.id}')">Excluir</button>
             </td>
-          </tr>`;}).join('') : `<tr class="empty-row"><td colspan="4">Cadastre o primeiro curso para começar.</td></tr>`}
+          </tr>`;}).join('') : `<tr class="empty-row"><td colspan="5">Cadastre o primeiro curso para começar.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -1926,11 +1926,15 @@ async function saveClass(){
 
 function openCourseModal(id){
   editing = id ? state.courses.find(c=>c.id===id) : null;
-  const c = editing || {name:'',price:''};
+  const c = editing || {name:'',price:'',commissionPercent:''};
   document.getElementById('modal').innerHTML = `
     <h3>${editing?'Editar curso':'Novo curso'}</h3>
     <div class="field"><label class="field-label">Nome do curso</label><input id="f-name" value="${escapeHtml(c.name)}"></div>
-    <div class="field"><label class="field-label">Preço padrão (R$)</label><input type="number" step="0.01" id="f-price" value="${c.price}"></div>
+    <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
+      <div class="field"><label class="field-label">Preço padrão (R$)</label><input type="number" step="0.01" id="f-price" value="${c.price}"></div>
+      <div class="field"><label class="field-label">Comissão do closer (%)</label><input type="number" step="0.1" min="0" max="100" id="f-commission" value="${c.commissionPercent==null?'':c.commissionPercent}" placeholder="ex: 10"></div>
+    </div>
+    <p class="sale-hint" style="margin:-4px 0 12px;">A comissão é calculada sobre o valor negociado de cada venda deste curso. Em vendas divididas, cada closer recebe sobre a sua parte.</p>
     <div class="modal-actions">
       <button onclick="closeModal()">Cancelar</button>
       <button class="primary" onclick="saveCourse()">Salvar</button>
@@ -1941,8 +1945,8 @@ function openCourseModal(id){
 async function saveCourse(){
   const name = document.getElementById('f-name').value.trim();
   if(!name){ alert('Informe o nome do curso.'); return; }
-  const data = { id: editing ? editing.id : uid(), name, price: parseFloat(document.getElementById('f-price').value)||0 };
-  const {error} = await sb.from('courses').upsert({id:data.id, name:data.name, price:data.price});
+  const data = { id: editing ? editing.id : uid(), name, price: parseFloat(document.getElementById('f-price').value)||0, commissionPercent: parseFloat(document.getElementById('f-commission').value)||0 };
+  const {error} = await sb.from('courses').upsert({id:data.id, name:data.name, price:data.price, commission_percent:data.commissionPercent});
   if(error){ alert('Erro ao salvar curso: '+error.message); return; }
   if(editing){ Object.assign(editing, data); } else { state.courses.push(data); }
   closeModal(); render();
@@ -2127,7 +2131,7 @@ async function importBackupFile(input){
     }
     if((parsed.courses||[]).length){
       const {error} = await sb.from('courses').insert(parsed.courses.map(c=>({
-        id:c.id, name:c.name, price:c.price||0,
+        id:c.id, name:c.name, price:c.price||0, commission_percent:c.commissionPercent||0,
         template_file_path: c.templateFile ? (c.templateFile.path||null) : null,
         template_file_name: c.templateFile ? (c.templateFile.name||null) : null,
         template_file_size: c.templateFile ? (c.templateFile.size||null) : null,

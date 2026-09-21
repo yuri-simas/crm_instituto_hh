@@ -86,3 +86,8 @@ alter table sales add column if not exists split_percent numeric default 100;
 -- students.phones guarda a lista; students.phone continua sendo o principal (primeiro da lista).
 alter table students add column if not exists phones text[] default '{}';
 update students set phones = array[phone] where (phones is null or cardinality(phones)=0) and coalesce(phone,'')<>'';
+
+-- ========== 8) COMISSÃO POR CURSO ==========
+-- O percentual de comissão passa a ser do curso (courses.commission_percent).
+-- Os campos de comissão/acelerador em closers ficam na tabela por compatibilidade, mas não são mais usados.
+alter table courses add column if not exists commission_percent numeric default 0;
