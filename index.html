@@ -864,10 +864,76 @@ function toolbarHtml(title, addLabel, onAdd, note){
 }
 
 /* ---------- STUDENTS ---------- */
+let studentFilter = {q:'', classId:'', pay:'', missing:''};
+function setStudentFilter(key, value){
+  studentFilter[key] = value;
+  const el = document.getElementById('students-f-'+key);
+  const pos = (el && el.tagName==='INPUT' && el.type==='text') ? el.selectionStart : null;
+  render();
+  const el2 = document.getElementById('students-f-'+key);
+  if(el2 && pos!=null){ el2.focus(); el2.setSelectionRange(pos,pos); }
+}
+function clearStudentFilter(){ studentFilter = {q:'', classId:'', pay:'', missing:''}; render(); }
+function studentSales(st){
+  const byHistory = (st.courseHistory||[]).map(ch=>ch.saleId).filter(Boolean);
+  const name = (st.name||'').trim().toLowerCase();
+  return state.sales.filter(s=>byHistory.includes(s.id) || (s.studentName||'').trim().toLowerCase()===name);
+}
+function studentClassIds(st){
+  const ids = studentSales(st).map(s=>s.classId).filter(Boolean);
+  state.classEnrollments.filter(e=>e.studentId===st.id).forEach(e=>ids.push(e.classId));
+  return Array.from(new Set(ids));
+}
+function studentOpenTotal(st){ return studentSales(st).reduce((a,s)=>a+saleOpen(s),0); }
+function applyStudentFilter(list){
+  const q = studentFilter.q.trim().toLowerCase();
+  const digits = q.replace(/\D/g,'');
+  return list.filter(st=>{
+    if(q){
+      const hay = [st.name, st.email, st.cpf, ...studentPhones(st)].map(v=>(v||'').toLowerCase());
+      const hayDigits = [st.cpf, ...studentPhones(st)].map(v=>(v||'').replace(/\D/g,''));
+      const hit = hay.some(v=>v.includes(q)) || (digits.length>=3 && hayDigits.some(v=>v.includes(digits)));
+      if(!hit) return false;
+    }
+    if(studentFilter.classId && !studentClassIds(st).includes(studentFilter.classId)) return false;
+    if(studentFilter.pay){
+      const open = studentOpenTotal(st);
+      if(studentFilter.pay==='open' && !(open>0.005)) return false;
+      if(studentFilter.pay==='paid' && (open>0.005 || !studentSales(st).length)) return false;
+    }
+    if(studentFilter.missing){
+      const faltando = !st.cpf || !studentPhones(st).length || !st.address;
+      if(studentFilter.missing==='1' && !faltando) return false;
+    }
+    return true;
+  });
+}
+function studentFiltersHtml(){
+  const classes = (courseFilter==='all' ? state.classes.slice() : state.classes.filter(c=>c.courseId===courseFilter))
+    .sort((a,b)=>(a.startDate||'9999').localeCompare(b.startDate||'9999'));
+  const active = Object.values(studentFilter).some(v=>v);
+  return `
+    <div class="sales-filters">
+      <div class="f grow"><label for="students-f-q">Buscar</label><input type="text" id="students-f-q" value="${escapeHtml(studentFilter.q)}" oninput="setStudentFilter('q', this.value)" placeholder="Nome, telefone, CPF ou e-mail..."></div>
+      <div class="f"><label for="students-f-classId">Turma</label><select id="students-f-classId" onchange="setStudentFilter('classId', this.value)"><option value="">Todas</option>${classes.map(c=>`<option value="${c.id}" ${studentFilter.classId===c.id?'selected':''}>${escapeHtml(courseFilter==='all' ? courseName(c.courseId)+' · ' : '')}${escapeHtml(classLabel(c))}</option>`).join('')}</select></div>
+      <div class="f"><label for="students-f-pay">Pagamento</label><select id="students-f-pay" onchange="setStudentFilter('pay', this.value)">
+        <option value="">Todos</option>
+        <option value="open" ${studentFilter.pay==='open'?'selected':''}>Com saldo em aberto</option>
+        <option value="paid" ${studentFilter.pay==='paid'?'selected':''}>Quitadas</option>
+      </select></div>
+      <div class="f"><label for="students-f-missing">Cadastro</label><select id="students-f-missing" onchange="setStudentFilter('missing', this.value)">
+        <option value="">Todos</option>
+        <option value="1" ${studentFilter.missing==='1'?'selected':''}>Incompleto (sem CPF, telefone ou endereço)</option>
+      </select></div>
+      ${active ? `<div class="f"><label>&nbsp;</label><button type="button" class="ghost" style="border:1px solid var(--border);" onclick="clearStudentFilter()">Limpar filtros</button></div>` : ''}
+    </div>`;
+}
+
 function renderStudents(){
-  const rows = filteredStudents();
+  const rows = applyStudentFilter(filteredStudents());
   return `
     ${toolbarHtml('Alunas','Nova aluna','openStudentModal()')}
+    ${studentFiltersHtml()}
     <div class="pill-note">O histórico de cursos e forma de pagamento é preenchido automaticamente quando uma venda é registrada em nome da aluna — mas você também pode ajustar manualmente aqui. Anexos de contrato ficam salvos junto com os demais dados; evite anexar muitos arquivos grandes para não atingir o limite de armazenamento.</div>
     <div class="card">
       <table>
@@ -878,12 +944,12 @@ function renderStudents(){
             <td style="font-weight:600;color:var(--ink);">${escapeHtml(s.name)}</td>
             <td class="mono" style="font-size:12px;">${studentPhones(s).map(escapeHtml).join('<br>')}${studentPhones(s).length?'<br>':''}${escapeHtml(s.email||'')}</td>
             <td class="mono">${escapeHtml(s.cpf||'—')}</td>
-            <td>${(s.courseHistory||[]).map(ch=>{const sale=ch.saleId?state.sales.find(x=>x.id===ch.saleId):null; const cl=sale?classById(sale.classId):null; const st=sale?salePayStatus(sale):null; return `<span class="badge ${st&&st.label!=='Quitado'?st.cls:'b-fechado'}" style="margin-right:4px;margin-bottom:4px;display:inline-block;" title="${st?escapeHtml(st.label):''}">${escapeHtml(courseName(ch.courseId))}${cl?' · '+escapeHtml(cl.name):''} · ${escapeHtml(paymentName(ch.paymentMethod))}${st&&st.label!=='Quitado'?' · '+st.label:''}</span>`;}).join('') || '—'}</td>
+            <td>${studentOpenTotal(s)>0.005 ? `<div style="font-size:11px;color:var(--danger);font-weight:600;margin-bottom:4px;">em aberto: ${fmtCurrency(studentOpenTotal(s))}</div>` : ''}${(s.courseHistory||[]).map(ch=>{const sale=ch.saleId?state.sales.find(x=>x.id===ch.saleId):null; const cl=sale?classById(sale.classId):null; const st=sale?salePayStatus(sale):null; return `<span class="badge ${st&&st.label!=='Quitado'?st.cls:'b-fechado'}" style="margin-right:4px;margin-bottom:4px;display:inline-block;" title="${st?escapeHtml(st.label):''}">${escapeHtml(courseName(ch.courseId))}${cl?' · '+escapeHtml(cl.name):''} · ${escapeHtml(paymentName(ch.paymentMethod))}${st&&st.label!=='Quitado'?' · '+st.label:''}</span>`;}).join('') || '—'}</td>
             <td style="text-align:right;white-space:nowrap;">
               <button class="ghost" onclick="openStudentModal('${s.id}')">Editar</button>
               <button class="danger-ghost" onclick="deleteItem('students','${s.id}')">Excluir</button>
             </td>
-          </tr>`).join('') : `<tr class="empty-row"><td colspan="5">Nenhuma aluna cadastrada.</td></tr>`}
+          </tr>`).join('') : `<tr class="empty-row"><td colspan="5">${Object.values(studentFilter).some(v=>v) ? 'Nenhuma aluna encontrada com esses filtros.' : 'Nenhuma aluna cadastrada.'}</td></tr>`}
         </tbody>
       </table>
     </div>
