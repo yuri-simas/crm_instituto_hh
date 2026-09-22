@@ -473,6 +473,7 @@ function defaultState(){
     classes: [],
     salePayments: [],
     classEnrollments: [],
+    commissionPayments: [],
   };
 }
 
@@ -487,7 +488,7 @@ async function rowToHistory(h){
 
 async function loadState(){
   try{
-    const [coursesR, paymentsR, closersR, usersR, leadsR, leadCoursesR, meetingsR, salesR, studentsR, historyR, classesR, salePaymentsR, enrollmentsR] = await Promise.all([
+    const [coursesR, paymentsR, closersR, usersR, leadsR, leadCoursesR, meetingsR, salesR, studentsR, historyR, classesR, salePaymentsR, enrollmentsR, commPaymentsR] = await Promise.all([
       sb.from('courses').select('*'),
       sb.from('payment_methods').select('*'),
       sb.from('closers').select('*'),
@@ -501,8 +502,9 @@ async function loadState(){
       sb.from('course_classes').select('*'),
       sb.from('sale_payments').select('*'),
       sb.from('class_enrollments').select('*'),
+      sb.from('commission_payments').select('*'),
     ]);
-    const results = [coursesR,paymentsR,closersR,usersR,leadsR,leadCoursesR,meetingsR,salesR,studentsR,historyR,classesR,salePaymentsR,enrollmentsR];
+    const results = [coursesR,paymentsR,closersR,usersR,leadsR,leadCoursesR,meetingsR,salesR,studentsR,historyR,classesR,salePaymentsR,enrollmentsR,commPaymentsR];
     const firstError = results.find(r=>r.error);
     if(firstError) throw firstError.error;
 
@@ -523,6 +525,7 @@ async function loadState(){
       classes: classesR.data.map(r=>({id:r.id, courseId:r.course_id, name:r.name, startDate:r.start_date, endDate:r.end_date, capacity:r.capacity||0, price:r.price})),
       salePayments: salePaymentsR.data.map(r=>({id:r.id, saleId:r.sale_id, amount:r.amount, date:r.date, paymentMethod:r.payment_method, notes:r.notes||''})),
       classEnrollments: enrollmentsR.data.map(r=>({id:r.id, classId:r.class_id, studentId:r.student_id, notes:r.notes||''})),
+      commissionPayments: commPaymentsR.data.map(r=>({id:r.id, closerId:r.closer_id, amount:Number(r.amount||0), date:r.date, notes:r.notes||''})),
       students: await Promise.all(studentsR.data.map(async r=>({
         id:r.id, name:r.name, phone:r.phone, phones:(Array.isArray(r.phones)&&r.phones.length)?r.phones:(r.phone?[r.phone]:[]), email:r.email, cpf:r.cpf, professionalRegistration:r.professional_registration, cep:r.cep, address:r.address,
         courseHistory: await Promise.all(historyR.data.filter(h=>h.student_id===r.id).map(rowToHistory)),
@@ -1727,31 +1730,47 @@ async function upsertStudentFromSale(saleData, leadId, phones){
 function courseCommissionPct(courseId){ const c=state.courses.find(x=>x.id===courseId); return c ? Number(c.commissionPercent||0) : 0; }
 function saleCommission(sale, closerId){ return Number(sale.value||0) * saleShare(sale, closerId) * courseCommissionPct(sale.courseId) / 100; }
 
+function closerCommissionPayments(closerId){
+  return state.commissionPayments.filter(p=>p.closerId===closerId).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+}
+function closerCommissionPaid(closerId){
+  return closerCommissionPayments(closerId).reduce((a,p)=>a+Number(p.amount||0),0);
+}
+
 function renderCommissions(){
-  const sales = filteredSales();
+  // A aba ignora o filtro de curso do topo: o saldo de comissão é sempre sobre todas as vendas do closer.
+  const sales = scopeByRole(state.sales);
   const semPct = state.courses.filter(c=>!(Number(c.commissionPercent||0)>0));
   const rows = state.closers.map(c=>{
     const cSales = sales.filter(s=>saleShare(s,c.id)>0);
     const total = cSales.reduce((a,s)=>a+Number(s.value||0)*saleShare(s,c.id),0);
     const commission = cSales.reduce((a,s)=>a+saleCommission(s,c.id),0);
+    const paid = closerCommissionPaid(c.id);
     const byCourse = {};
     cSales.forEach(s=>{
       const k = s.courseId||'';
       if(!byCourse[k]) byCourse[k] = {courseId:k, qty:0, total:0, commission:0};
       byCourse[k].qty++; byCourse[k].total += Number(s.value||0)*saleShare(s,c.id); byCourse[k].commission += saleCommission(s,c.id);
     });
-    return {c, total, commission, qty: cSales.length, byCourse: Object.values(byCourse).sort((a,b)=>b.commission-a.commission)};
+    return {c, total, commission, paid, open: commission-paid, qty: cSales.length,
+      byCourse: Object.values(byCourse).sort((a,b)=>b.commission-a.commission),
+      payments: closerCommissionPayments(c.id)};
   });
-  const totalComissao = rows.reduce((a,r)=>a+r.commission,0);
+  const totGerada = rows.reduce((a,r)=>a+r.commission,0);
+  const totPaga = rows.reduce((a,r)=>a+r.paid,0);
+  const totAberto = totGerada-totPaga;
+  const isAdmin = currentUser.role==='admin';
   return `
     ${toolbarHtml('Comissionamento','Novo closer','openCloserModal()')}
-    <div class="pill-note">Comissão = valor negociado da venda × percentual de comissão do <strong>curso</strong> (definido em Cursos). Em vendas com comissão dividida, cada closer recebe sobre a sua parte.${semPct.length?` <strong>Atenção:</strong> sem percentual definido: ${semPct.map(c=>escapeHtml(c.name)).join(', ')}.`:''}</div>
+    <div class="pill-note">Comissão = valor negociado da venda × percentual de comissão do <strong>curso</strong> (definido em Cursos). Em vendas com comissão dividida, cada closer recebe sobre a sua parte. Esta aba considera todos os cursos, independente do filtro no topo.${semPct.length?` <strong>Atenção:</strong> sem percentual definido: ${semPct.map(c=>escapeHtml(c.name)).join(', ')}.`:''}</div>
     <div class="grid-metrics">
-      <div class="metric"><div class="label">Comissão total devida</div><div class="value gold mono">${fmtCurrency(totalComissao)}</div></div>
+      <div class="metric"><div class="label">Comissão gerada</div><div class="value gold mono">${fmtCurrency(totGerada)}</div></div>
+      <div class="metric"><div class="label">Já paga</div><div class="value teal mono">${fmtCurrency(totPaga)}</div></div>
+      <div class="metric"><div class="label">Em aberto</div><div class="value ${totAberto>0.005?'danger':''} mono">${fmtCurrency(totAberto)}</div></div>
     </div>
     <div class="card">
       <table>
-        <thead><tr><th>Closer</th><th>Vendas</th><th>Total vendido (sua parte)</th><th>Comissão devida</th><th>Detalhamento por curso</th><th></th></tr></thead>
+        <thead><tr><th>Closer</th><th>Vendas</th><th>Total vendido (sua parte)</th><th>Comissão gerada</th><th>Paga</th><th>Em aberto</th><th>Detalhes</th>${isAdmin?'<th></th>':''}</tr></thead>
         <tbody>
         ${rows.length ? rows.map(r=>`
           <tr>
@@ -1759,16 +1778,82 @@ function renderCommissions(){
             <td>${r.qty}</td>
             <td class="mono">${fmtCurrency(r.total)}</td>
             <td class="mono" style="color:var(--gold);font-weight:600;">${fmtCurrency(r.commission)}</td>
-            <td>${r.byCourse.length ? `<details class="class-students"><summary>ver ${r.byCourse.length} curso${r.byCourse.length===1?'':'s'}</summary><ul>${r.byCourse.map(b=>`<li>${escapeHtml(courseName(b.courseId))} · ${courseCommissionPct(b.courseId)}% · ${b.qty} venda${b.qty===1?'':'s'} · <span class="mono">${fmtCurrency(b.total)}</span> → <span class="mono" style="color:var(--gold);font-weight:600;">${fmtCurrency(b.commission)}</span></li>`).join('')}</ul></details>` : '<span style="color:var(--ink-soft);">—</span>'}</td>
-            <td style="text-align:right;white-space:nowrap;">
+            <td class="mono">${fmtCurrency(r.paid)}</td>
+            <td class="mono" style="${r.open>0.005?'color:var(--danger);font-weight:600;':''}">${fmtCurrency(r.open)}${r.open<-0.005?'<div style="font-size:10.5px;color:var(--ink-soft);font-weight:400;">pago a mais</div>':''}</td>
+            <td>
+              ${r.byCourse.length ? `<details class="class-students"><summary>por curso (${r.byCourse.length})</summary><ul>${r.byCourse.map(b=>`<li>${escapeHtml(courseName(b.courseId))} · ${courseCommissionPct(b.courseId)}% · ${b.qty} venda${b.qty===1?'':'s'} · <span class="mono">${fmtCurrency(b.total)}</span> → <span class="mono" style="color:var(--gold);font-weight:600;">${fmtCurrency(b.commission)}</span></li>`).join('')}</ul></details>` : '<span style="color:var(--ink-soft);">—</span>'}
+              ${r.payments.length ? `<details class="class-students"><summary>pagamentos (${r.payments.length})</summary><ul>${r.payments.map(pg=>`<li><span class="mono">${fmtDate(pg.date)}</span> · <span class="mono" style="font-weight:600;">${fmtCurrency(pg.amount)}</span>${pg.notes?' · '+escapeHtml(pg.notes):''}${isAdmin?` <button type="button" class="danger-ghost" style="padding:0 4px;font-size:11px;" onclick="removeCommissionPayment('${pg.id}')">remover</button>`:''}</li>`).join('')}</ul></details>` : ''}
+            </td>
+            ${isAdmin ? `<td style="text-align:right;white-space:nowrap;">
+              <button class="ghost" onclick="openCommissionPaymentModal('${r.c.id}')">Registrar pagamento</button>
               <button class="ghost" onclick="openCloserModal('${r.c.id}')">Editar</button>
               <button class="danger-ghost" onclick="deleteItem('closers','${r.c.id}')">Excluir</button>
-            </td>
-          </tr>`).join('') : `<tr class="empty-row"><td colspan="6">Nenhum closer cadastrado ainda.</td></tr>`}
+            </td>` : ''}
+          </tr>`).join('') : `<tr class="empty-row"><td colspan="${isAdmin?8:7}">Nenhum closer cadastrado ainda.</td></tr>`}
         </tbody>
       </table>
     </div>
   `;
+}
+
+function openCommissionPaymentModal(closerId){
+  const closer = state.closers.find(c=>c.id===closerId); if(!closer) return;
+  editing = null;
+  const sales = scopeByRole(state.sales).filter(s=>saleShare(s,closerId)>0);
+  const commission = sales.reduce((a,s)=>a+saleCommission(s,closerId),0);
+  const paid = closerCommissionPaid(closerId);
+  const open = Math.max(0, commission-paid);
+  const history = closerCommissionPayments(closerId);
+  document.getElementById('modal').innerHTML = `
+    <h3>Pagamento de comissão — ${escapeHtml(closer.name)}</h3>
+    <div class="pay-summary">
+      <div class="box"><div class="label">Gerada</div><div class="val gold">${fmtCurrency(commission)}</div></div>
+      <div class="box"><div class="label">Já paga</div><div class="val">${fmtCurrency(paid)}</div></div>
+      <div class="box"><div class="label">Em aberto</div><div class="val ${open>0.005?'danger':'ok'}">${fmtCurrency(open)}</div></div>
+    </div>
+    <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
+      <div class="field"><label class="field-label">Valor pago (R$)</label><input type="number" step="0.01" id="f-comm-amount" value="${open>0?open.toFixed(2):''}" placeholder="0,00"></div>
+      <div class="field"><label class="field-label">Data</label><input type="date" id="f-comm-date" value="${new Date().toISOString().slice(0,10)}"></div>
+    </div>
+    <div class="field"><label class="field-label">Observações</label><input id="f-comm-notes" placeholder="ex: referente a setembro/2026"></div>
+    ${history.length ? `
+    <div class="section-head" style="margin-top:6px;margin-bottom:8px;"><h3 style="font-size:15px;">Histórico de pagamentos</h3></div>
+    <div class="pay-list">
+      <table>
+        <thead><tr><th>Data</th><th>Valor</th><th>Obs.</th><th></th></tr></thead>
+        <tbody>${history.map(pg=>`<tr>
+          <td class="mono">${fmtDate(pg.date)}</td>
+          <td class="mono" style="font-weight:600;color:var(--ink);">${fmtCurrency(pg.amount)}</td>
+          <td style="font-size:12px;color:var(--ink-soft);">${escapeHtml(pg.notes||'')}</td>
+          <td style="text-align:right;"><button type="button" class="danger-ghost" onclick="removeCommissionPayment('${pg.id}', true)">Remover</button></td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>` : ''}
+    <div class="modal-actions">
+      <button onclick="closeModal()">Fechar</button>
+      <button class="primary" onclick="saveCommissionPayment('${closerId}')">Registrar pagamento</button>
+    </div>`;
+  openModal();
+}
+
+async function saveCommissionPayment(closerId){
+  const amount = parseFloat(document.getElementById('f-comm-amount').value)||0;
+  if(amount<=0){ alert('Informe o valor pago.'); return; }
+  const p = { id: uid(), closerId, amount, date: document.getElementById('f-comm-date').value||null, notes: document.getElementById('f-comm-notes').value.trim() };
+  const {error} = await sb.from('commission_payments').insert({id:p.id, closer_id:p.closerId, amount:p.amount, date:p.date, notes:p.notes||null});
+  if(error){ alert('Erro ao registrar pagamento de comissão: '+error.message); return; }
+  state.commissionPayments.push(p);
+  closeModal(); render();
+}
+
+async function removeCommissionPayment(paymentId, fromModal){
+  const p = state.commissionPayments.find(x=>x.id===paymentId); if(!p) return;
+  if(!confirm(`Remover o pagamento de ${fmtCurrency(p.amount)} de ${fmtDate(p.date)}?`)) return;
+  const {error} = await sb.from('commission_payments').delete().eq('id', paymentId);
+  if(error){ alert('Erro ao remover: '+error.message); return; }
+  state.commissionPayments = state.commissionPayments.filter(x=>x.id!==paymentId);
+  if(fromModal) openCommissionPaymentModal(p.closerId);
+  render();
 }
 
 function openCloserModal(id){
@@ -2233,7 +2318,7 @@ async function importBackupFile(input){
   if(!parsed.users.find(u=>u.id===meBackup.id)) parsed.users.push(meBackup);
 
   try{
-    for(const table of ['class_enrollments','sale_payments','student_course_history','lead_courses','meetings','sales','course_classes','students','leads','users','closers','courses','payment_methods']){
+    for(const table of ['commission_payments','class_enrollments','sale_payments','student_course_history','lead_courses','meetings','sales','course_classes','students','leads','users','closers','courses','payment_methods']){
       const {error} = await sb.from(table).delete().neq('id', '__none__');
       if(error) throw error;
     }
@@ -2317,6 +2402,10 @@ async function importBackupFile(input){
         contract_file_size: ch.contractFile ? (ch.contractFile.size||null) : null,
       })));
       if(historyRows.length){ const {error:hErr} = await sb.from('student_course_history').insert(historyRows); if(hErr) throw hErr; }
+    }
+    if((parsed.commissionPayments||[]).length){
+      const {error} = await sb.from('commission_payments').insert(parsed.commissionPayments.map(p=>({id:p.id, closer_id:p.closerId, amount:p.amount||0, date:p.date||null, notes:p.notes||null})));
+      if(error) throw error;
     }
     if((parsed.classEnrollments||[]).length){
       const {error} = await sb.from('class_enrollments').insert(parsed.classEnrollments.map(e=>({id:e.id, class_id:e.classId, student_id:e.studentId, notes:e.notes||null})));
@@ -2487,6 +2576,7 @@ async function deleteItem(collection, id){
   }
   if(collection==='closers'){
     state.sales.forEach(s=>{ if(s.closer2Id===id){ s.closer2Id=''; s.splitPercent=100; } });
+    state.commissionPayments = state.commissionPayments.filter(p=>p.closerId!==id);
   }
   if(collection==='classes'){
     state.sales.forEach(s=>{ if(s.classId===id) s.classId=''; });

@@ -91,3 +91,19 @@ update students set phones = array[phone] where (phones is null or cardinality(p
 -- O percentual de comissão passa a ser do curso (courses.commission_percent).
 -- Os campos de comissão/acelerador em closers ficam na tabela por compatibilidade, mas não são mais usados.
 alter table courses add column if not exists commission_percent numeric default 0;
+
+-- ========== 9) PAGAMENTO DE COMISSÕES ==========
+-- Cada repasse de comissão a um closer vira uma linha; o saldo em aberto é
+-- (comissão gerada pelas vendas) - (soma dos pagamentos).
+create table if not exists commission_payments (
+  id text primary key,
+  closer_id text references closers(id) on delete cascade,
+  amount numeric not null default 0,
+  date date,
+  notes text,
+  created_at timestamptz default now()
+);
+create index if not exists commission_payments_closer_id_idx on commission_payments(closer_id);
+alter table commission_payments enable row level security;
+drop policy if exists authenticated_all on commission_payments;
+create policy authenticated_all on commission_payments for all to authenticated using (true) with check (true);
