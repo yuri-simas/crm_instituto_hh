@@ -178,6 +178,18 @@ tbody tr:last-child td{border-bottom:none;}
 .bar-track{flex:1;background:#EEF0F6;border-radius:6px;height:18px;position:relative;}
 .bar-fill{height:100%;background:var(--gold);border-radius:6px;}
 .bar-val{width:90px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-soft);flex-shrink:0;}
+.course-rank td{vertical-align:middle;}
+.course-rank .bar-track{height:14px;}
+.course-rank td:first-child{min-width:130px;}
+.funnel-card{padding:0;}
+.funnel-card summary{cursor:pointer;list-style:none;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;font-family:'Fraunces',serif;font-size:16px;color:var(--ink);}
+.funnel-card summary::-webkit-details-marker{display:none;}
+.funnel-card summary::after{content:'▾';font-family:'Inter',sans-serif;font-size:12px;color:var(--ink-soft);}
+.funnel-card[open] summary::after{content:'▴';}
+.funnel-card summary:hover{background:var(--bg);border-radius:12px;}
+.funnel-card .funnel-sum{font-family:'Inter',sans-serif;font-size:12px;color:var(--ink-soft);font-weight:400;}
+.funnel-card>*:not(summary){padding:0 20px;}
+.funnel-card>*:last-child{padding-bottom:18px;}
 
 /* view toggle */
 .view-toggle{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;flex-shrink:0;}
@@ -708,6 +720,9 @@ function render(){
 }
 
 /* ---------- DASHBOARD ---------- */
+let dashCourseMetric = 'value';
+function setDashCourseMetric(v){ dashCourseMetric = v; render(); }
+
 function renderDashboard(){
   const leads = filteredLeads();
   const meetings = filteredMeetings();
@@ -716,22 +731,42 @@ function renderDashboard(){
   const totalVendido = sales.reduce((a,s)=>a+Number(s.value||0),0);
   const totalRecebido = sales.reduce((a,s)=>a+Math.min(Number(s.value||0), salePaid(s.id)),0);
   const totalAberto = sales.reduce((a,s)=>a+saleOpen(s),0);
-  const qtdReunioes = meetings.filter(m=>['Agendada','Realizada','No-show'].includes(m.status)).length;
+  const ticket = sales.length ? totalVendido/sales.length : 0;
   const qtdRealizadas = meetings.filter(m=>m.status==='Realizada').length;
   const qtdNoShow = meetings.filter(m=>m.status==='No-show').length;
   const noShowRate = (qtdRealizadas+qtdNoShow) ? Math.round(qtdNoShow/(qtdRealizadas+qtdNoShow)*100) : 0;
   const conversao = leads.length ? Math.round(sales.length/leads.length*100) : 0;
+
+  /* ----- vendas por curso ----- */
+  const byCourse = {};
+  sales.forEach(s=>{
+    const k = s.courseId||'';
+    if(!byCourse[k]) byCourse[k] = {courseId:k, qty:0, value:0, paid:0, open:0};
+    const b = byCourse[k];
+    b.qty++; b.value += Number(s.value||0);
+    b.paid += Math.min(Number(s.value||0), salePaid(s.id));
+    b.open += saleOpen(s);
+  });
+  const courseRows = Object.values(byCourse).sort((a,b)=>b[dashCourseMetric]-a[dashCourseMetric] || b.value-a.value);
+  const maxCourse = Math.max(1, ...courseRows.map(r=>r[dashCourseMetric]));
+
+  /* ----- próximas turmas ----- */
+  const today = new Date().toISOString().slice(0,10);
+  const upcoming = (courseFilter==='all' ? state.classes : state.classes.filter(c=>c.courseId===courseFilter))
+    .filter(c=>!((c.endDate||c.startDate) && (c.endDate||c.startDate) < today))
+    .sort((a,b)=>(a.startDate||'9999').localeCompare(b.startDate||'9999'))
+    .slice(0,6);
+
+  const byPayment = {};
+  sales.forEach(s=>{ const n=paymentName(s.paymentMethod); byPayment[n]=(byPayment[n]||0)+Number(s.value||0); });
+  const paymentEntries = Object.entries(byPayment).sort((a,b)=>b[1]-a[1]);
+  const maxPay = Math.max(1, ...paymentEntries.map(e=>e[1]));
 
   const funnelSteps = LEAD_STATUS.map(status=>({
     label: status,
     value: leads.filter(l=>l.status===status).length,
     color: STATUS_COLOR[status] || 'var(--teal)',
   }));
-
-  const byPayment = {};
-  sales.forEach(s=>{ const n=paymentName(s.paymentMethod); byPayment[n]=(byPayment[n]||0)+Number(s.value||0); });
-  const paymentEntries = Object.entries(byPayment).sort((a,b)=>b[1]-a[1]);
-  const maxPay = Math.max(1, ...paymentEntries.map(e=>e[1]));
 
   const closerRows = state.closers.map(c=>{
     const cLeads = leads.filter(l=>l.closerId===c.id);
@@ -748,23 +783,69 @@ function renderDashboard(){
       <div class="metric"><div class="label">Total vendido</div><div class="value gold mono">${fmtCurrency(totalVendido)}</div></div>
       <div class="metric"><div class="label">Recebido</div><div class="value teal mono">${fmtCurrency(totalRecebido)}</div></div>
       <div class="metric"><div class="label">A receber</div><div class="value ${totalAberto>0?'danger':''} mono">${fmtCurrency(totalAberto)}</div></div>
-      <div class="metric"><div class="label">Leads recebidos</div><div class="value mono">${leads.length}</div></div>
-      <div class="metric"><div class="label">Reuniões realizadas</div><div class="value teal mono">${qtdRealizadas}</div></div>
-      <div class="metric"><div class="label">Taxa de no-show</div><div class="value ${noShowRate>25?'danger':''} mono">${noShowRate}%</div></div>
-      <div class="metric"><div class="label">Conversão lead → venda</div><div class="value mono">${conversao}%</div></div>
+      <div class="metric"><div class="label">Vendas fechadas</div><div class="value mono">${sales.length}</div></div>
+      <div class="metric"><div class="label">Ticket médio</div><div class="value mono">${fmtCurrency(ticket)}</div></div>
     </div>
 
     <div class="grid2">
       <div class="card">
         <div class="section-head">
-          <h3>Funil de vendas</h3>
+          <h3>Vendas por curso</h3>
           <div class="view-toggle">
-            <button type="button" class="${dashboardChartView==='funnel'?'active':''}" onclick="setDashboardChartView('funnel')">Funil</button>
-            <button type="button" class="${dashboardChartView==='bars'?'active':''}" onclick="setDashboardChartView('bars')">Barras</button>
-            <button type="button" class="${dashboardChartView==='donut'?'active':''}" onclick="setDashboardChartView('donut')">Pizza</button>
+            <button type="button" class="${dashCourseMetric==='value'?'active':''}" onclick="setDashCourseMetric('value')">Valor</button>
+            <button type="button" class="${dashCourseMetric==='qty'?'active':''}" onclick="setDashCourseMetric('qty')">Quantidade</button>
           </div>
         </div>
-        ${renderStageChart(funnelSteps)}
+        ${courseRows.length ? `
+        <table class="course-rank">
+          <thead><tr><th>Curso</th><th style="width:32%;">${dashCourseMetric==='value'?'Valor vendido':'Alunas'}</th><th style="text-align:right;">Alunas</th><th style="text-align:right;">Valor</th><th style="text-align:right;">Em aberto</th></tr></thead>
+          <tbody>
+          ${courseRows.map(r=>{
+            const pct = Math.round(r[dashCourseMetric]/maxCourse*100);
+            return `<tr title="${escapeHtml(courseName(r.courseId))}: ${r.qty} venda${r.qty===1?'':'s'} · ${fmtCurrency(r.value)} · recebido ${fmtCurrency(r.paid)} · em aberto ${fmtCurrency(r.open)}">
+              <td style="font-weight:600;color:var(--ink);">${escapeHtml(courseName(r.courseId))}</td>
+              <td><div class="bar-track"><div class="bar-fill" style="width:${Math.max(pct,2)}%"></div></div></td>
+              <td class="mono" style="text-align:right;">${r.qty}</td>
+              <td class="mono" style="text-align:right;color:var(--gold);font-weight:600;">${fmtPrice(r.value)}</td>
+              <td class="mono" style="text-align:right;${r.open>0.005?'color:var(--danger);':'color:var(--ink-soft);'}">${fmtPrice(r.open)}</td>
+            </tr>`;}).join('')}
+          </tbody>
+        </table>` : '<p style="color:var(--ink-soft);font-size:13px;">Nenhuma venda registrada ainda.</p>'}
+      </div>
+      <div class="card">
+        <div class="section-head"><h3>Próximas turmas</h3></div>
+        ${upcoming.length ? `
+        <table>
+          <thead><tr><th>Turma</th><th>Início</th><th style="text-align:right;">Vagas</th></tr></thead>
+          <tbody>
+          ${upcoming.map(cl=>{
+            const qty = classOccupancy(cl.id), cap = Number(cl.capacity||0);
+            const full = cap>0 && qty>=cap;
+            return `<tr>
+              <td style="font-weight:600;color:var(--ink);">${escapeHtml(cl.name)}<div style="font-size:11px;color:var(--ink-soft);font-weight:400;">${escapeHtml(courseName(cl.courseId))}</div></td>
+              <td class="mono">${fmtDate(cl.startDate)}</td>
+              <td style="text-align:right;">${cap ? `<span class="badge ${full?'b-lotada':'b-fechado'}">${qty}/${cap}</span>` : `<span class="badge b-novo">${qty}</span>`}</td>
+            </tr>`;}).join('')}
+          </tbody>
+        </table>` : '<p style="color:var(--ink-soft);font-size:13px;">Nenhuma turma programada.</p>'}
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <div class="section-head"><h3>Desempenho por closer</h3></div>
+        <table>
+          <thead><tr><th>Closer</th><th style="text-align:right;">Vendas</th><th style="text-align:right;">Valor fechado</th><th style="text-align:right;">Conversão</th></tr></thead>
+          <tbody>
+          ${closerRows.length ? closerRows.map(r=>`
+            <tr>
+              <td style="font-weight:600;color:var(--ink);">${escapeHtml(r.name)}</td>
+              <td style="text-align:right;">${r.vendas}</td>
+              <td class="mono" style="text-align:right;">${fmtPrice(r.valor)}</td>
+              <td style="text-align:right;"><span class="badge b-fechado">${r.conv}%</span></td>
+            </tr>`).join('') : `<tr class="empty-row"><td colspan="4">Cadastre closers para ver o desempenho.</td></tr>`}
+          </tbody>
+        </table>
       </div>
       <div class="card">
         <div class="section-head"><h3>Vendas por forma de pagamento</h3></div>
@@ -772,26 +853,26 @@ function renderDashboard(){
           <div class="bar-row">
             <div class="bar-label">${escapeHtml(name)}</div>
             <div class="bar-track"><div class="bar-fill" style="width:${Math.round(val/maxPay*100)}%"></div></div>
-            <div class="bar-val mono">${fmtCurrency(val)}</div>
+            <div class="bar-val mono">${fmtPrice(val)}</div>
           </div>`).join('') : '<p style="color:var(--ink-soft);font-size:13px;">Nenhuma venda registrada ainda.</p>'}
       </div>
     </div>
 
-    <div class="card">
-      <div class="section-head"><h3>Desempenho por closer</h3></div>
-      <table>
-        <thead><tr><th>Closer</th><th>Leads</th><th>Reuniões realizadas</th><th>No-show</th><th>Vendas</th><th>Valor fechado</th><th>Conversão</th></tr></thead>
-        <tbody>
-        ${closerRows.length ? closerRows.map(r=>`
-          <tr>
-            <td style="font-weight:600;color:var(--ink);">${escapeHtml(r.name)}</td>
-            <td>${r.leads}</td><td>${r.realizadas}</td><td>${r.noshow}</td><td>${r.vendas}</td>
-            <td class="mono">${fmtCurrency(r.valor)}</td>
-            <td><span class="badge b-fechado">${r.conv}%</span></td>
-          </tr>`).join('') : `<tr class="empty-row"><td colspan="7">Cadastre closers para ver o desempenho.</td></tr>`}
-        </tbody>
-      </table>
-    </div>
+    <details class="card funnel-card">
+      <summary>
+        <span>Funil de leads</span>
+        <span class="funnel-sum">${leads.length} leads · ${qtdRealizadas} reuniões realizadas · no-show ${noShowRate}% · conversão ${conversao}%</span>
+      </summary>
+      <div class="section-head" style="margin-top:14px;">
+        <h3 style="font-size:15px;">Leads por etapa</h3>
+        <div class="view-toggle">
+          <button type="button" class="${dashboardChartView==='funnel'?'active':''}" onclick="setDashboardChartView('funnel')">Funil</button>
+          <button type="button" class="${dashboardChartView==='bars'?'active':''}" onclick="setDashboardChartView('bars')">Barras</button>
+          <button type="button" class="${dashboardChartView==='donut'?'active':''}" onclick="setDashboardChartView('donut')">Pizza</button>
+        </div>
+      </div>
+      ${renderStageChart(funnelSteps)}
+    </details>
   `;
 }
 
