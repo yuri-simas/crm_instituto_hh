@@ -417,6 +417,31 @@ function maskCEP(input){
   input.value = v;
 }
 
+// Campos de dinheiro aceitam o formato brasileiro: "29.840,00", "29840", "1234.56".
+// Regra: se houver vírgula, ela é o decimal e os pontos são milhar. Sem vírgula, um ponto
+// seguido de exatamente 3 dígitos é separador de milhar; caso contrário, é decimal.
+function parseMoney(v){
+  if(v==null) return 0;
+  let t = String(v).replace(/[^\d.,-]/g,'').trim();
+  if(!t) return 0;
+  if(t.includes(',')){
+    t = t.replace(/\./g,'').replace(',', '.');
+  } else {
+    const parts = t.split('.');
+    if(parts.length>1 && parts.every((x,i)=>i===0 || x.length===3)) t = parts.join('');
+  }
+  const n = parseFloat(t);
+  return isNaN(n) ? 0 : n;
+}
+function moneyValue(id){ const el=document.getElementById(id); return el ? parseMoney(el.value) : 0; }
+function moneyIsEmpty(id){ const el=document.getElementById(id); return !el || el.value.trim()===''; }
+function fmtMoneyInput(v){
+  if(v==null || v==='') return '';
+  const n = typeof v==='number' ? v : parseMoney(v);
+  return n.toLocaleString('pt-BR',{minimumFractionDigits:2, maximumFractionDigits:2});
+}
+function onMoneyBlur(el){ el.value = el.value.trim()==='' ? '' : fmtMoneyInput(parseMoney(el.value)); el.dispatchEvent(new Event('input',{bubbles:true})); }
+
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7);}
 function fmtCurrency(v){return (v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});}
 function fmtDate(d){ if(!d) return '—'; const parts=d.split('-'); return parts.length===3?`${parts[2]}/${parts[1]}/${parts[0]}`:d;}
@@ -1531,8 +1556,8 @@ function openSaleModal(id){
       </div>
     </div>
     <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
-      <div class="field"><label class="field-label">Preço de tabela (R$)</label><input type="number" step="0.01" id="f-list-price" value="${listPrice}" placeholder="sem preço de tabela" data-cleared="${listPriceCleared?'1':'0'}" oninput="this.dataset.cleared=(this.value===''?'1':'0');updateSaleDiscount()"></div>
-      <div class="field"><label class="field-label">Valor negociado (R$)</label><input type="number" step="0.01" id="f-value" value="${s.value}" placeholder="0,00" oninput="updateSaleDiscount();if(editing)refreshSalePayments(editing.id)"></div>
+      <div class="field"><label class="field-label">Preço de tabela (R$)</label><input type="text" inputmode="decimal" id="f-list-price" value="${fmtMoneyInput(listPrice)}" placeholder="sem preço de tabela" data-cleared="${listPriceCleared?'1':'0'}" oninput="this.dataset.cleared=(this.value.trim()===''?'1':'0');updateSaleDiscount()" onblur="onMoneyBlur(this)"></div>
+      <div class="field"><label class="field-label">Valor negociado (R$)</label><input type="text" inputmode="decimal" id="f-value" value="${fmtMoneyInput(s.value)}" placeholder="0,00" oninput="updateSaleDiscount();if(editing)refreshSalePayments(editing.id)" onblur="onMoneyBlur(this)"></div>
     </div>
     <div class="sale-hint" id="sale-discount"></div>
     <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
@@ -1546,7 +1571,7 @@ function openSaleModal(id){
     ` : `
     <div class="section-head" style="margin-top:6px;margin-bottom:6px;"><h3 style="font-size:15px;">Pagamento inicial (sinal)</h3></div>
     <div class="pay-add" style="margin-bottom:6px;">
-      <div><label>Valor pago agora</label><input type="number" step="0.01" id="f-first-amount" placeholder="0,00"></div>
+      <div><label>Valor pago agora</label><input type="text" inputmode="decimal" id="f-first-amount" placeholder="0,00" onblur="onMoneyBlur(this)"></div>
       <div><label>Data</label><input type="date" id="f-first-date" value="${today}"></div>
       <div><label>Forma</label><select id="f-first-method">${payOpts(s.paymentMethod)}</select></div>
       <div><label>Obs.</label><input id="f-first-notes" placeholder="ex: sinal no evento"></div>
@@ -1583,13 +1608,13 @@ function onSaleClassChange(){
   const cls = classById(document.getElementById('f-class').value);
   const price = cls ? classPrice(cls) : (state.courses.find(c=>c.id===courseId)?.price ?? null);
   const lp = document.getElementById('f-list-price');
-  if(price!=null && lp.dataset.cleared!=='1') lp.value = price;
+  if(price!=null && lp.dataset.cleared!=='1') lp.value = fmtMoneyInput(price);
   updateSaleDiscount();
 }
 function updateSaleDiscount(){
   const el = document.getElementById('sale-discount'); if(!el) return;
-  const list = parseFloat(document.getElementById('f-list-price').value)||0;
-  const val = parseFloat(document.getElementById('f-value').value)||0;
+  const list = moneyValue('f-list-price');
+  const val = moneyValue('f-value');
   if(list>0 && val>0 && list>val){
     el.textContent = `Desconto concedido: ${fmtCurrency(list-val)} (${Math.round((list-val)/list*100)}%)`;
   } else if(list>0 && val>list){
@@ -1637,7 +1662,7 @@ function salePaymentsSectionHtml(saleId, totalOverride){
       </table>
     </div>
     <div class="pay-add">
-      <div><label>Valor</label><input type="number" step="0.01" id="f-pay-amount" placeholder="0,00" value="${open>0?open.toFixed(2):''}"></div>
+      <div><label>Valor</label><input type="text" inputmode="decimal" id="f-pay-amount" placeholder="0,00" value="${open>0?fmtMoneyInput(open):''}" onblur="onMoneyBlur(this)"></div>
       <div><label>Data</label><input type="date" id="f-pay-date" value="${today}"></div>
       <div><label>Forma</label><select id="f-pay-method">${state.paymentMethods.map(p=>`<option value="${p.id}" ${sale.paymentMethod===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select></div>
       <div><label>Obs.</label><input id="f-pay-notes" placeholder="ex: 2ª parcela"></div>
@@ -1649,11 +1674,10 @@ function salePaymentsSectionHtml(saleId, totalOverride){
 function refreshSalePayments(saleId){
   const el = document.getElementById('sale-payments');
   if(!el) return;
-  const valEl = document.getElementById('f-value');
-  el.innerHTML = salePaymentsSectionHtml(saleId, valEl ? (parseFloat(valEl.value)||0) : null);
+  el.innerHTML = salePaymentsSectionHtml(saleId, document.getElementById('f-value') ? moneyValue('f-value') : null);
 }
 async function addSalePayment(saleId){
-  const amount = parseFloat(document.getElementById('f-pay-amount').value)||0;
+  const amount = moneyValue('f-pay-amount');
   if(amount<=0){ alert('Informe o valor pago.'); return; }
   const p = { id: uid(), saleId, amount, date: document.getElementById('f-pay-date').value||null,
     paymentMethod: document.getElementById('f-pay-method').value||null, notes: document.getElementById('f-pay-notes').value.trim() };
@@ -1666,8 +1690,7 @@ async function addSalePayment(saleId){
 }
 async function markSalePaid(saleId){
   const sale = state.sales.find(s=>s.id===saleId); if(!sale) return;
-  const valEl = document.getElementById('f-value');
-  const total = valEl ? (parseFloat(valEl.value)||0) : Number(sale.value||0);
+  const total = document.getElementById('f-value') ? moneyValue('f-value') : Number(sale.value||0);
   const open = Math.max(0, total - salePaid(saleId));
   if(open<=0) return;
   if(!confirm(`Registrar pagamento de ${fmtCurrency(open)} com a data de hoje e marcar a venda como quitada?`)) return;
@@ -1716,7 +1739,7 @@ async function saveSale(){
 // Grava a venda a partir do formulário sem fechar o modal. Retorna true se salvou.
 async function persistSale(){
   const studentName = document.getElementById('f-name').value.trim();
-  const value = parseFloat(document.getElementById('f-value').value)||0;
+  const value = moneyValue('f-value');
   if(!studentName){ alert('Informe o nome da aluna.'); return false; }
   const leadId = document.getElementById('f-lead').value;
   const closerId = document.getElementById('f-closer').value;
@@ -1724,7 +1747,7 @@ async function persistSale(){
   if(closer2Id && closer2Id===closerId){ alert('O closer 2 precisa ser diferente do closer 1.'); return false; }
   const splitPercent = closer2Id ? Math.min(99, Math.max(1, parseInt(document.getElementById('f-split').value,10)||50)) : 100;
   const classId = document.getElementById('f-class').value || '';
-  const listPriceRaw = document.getElementById('f-list-price').value;
+  const listPriceCleared2 = moneyIsEmpty('f-list-price');
   const cls = classById(classId);
   if(cls && Number(cls.capacity||0)>0 && (!editing || editing.classId!==classId)){
     const qty = classOccupancy(classId);
@@ -1736,7 +1759,7 @@ async function persistSale(){
     courseId: document.getElementById('f-course').value,
     classId,
     closerId, closer2Id, splitPercent,
-    value, listPrice: listPriceRaw==='' ? 0 : (parseFloat(listPriceRaw)||0),
+    value, listPrice: listPriceCleared2 ? 0 : moneyValue('f-list-price'),
     paymentMethod: document.getElementById('f-payment').value,
     date: document.getElementById('f-date').value,
     notes: document.getElementById('f-notes').value.trim(),
@@ -1750,7 +1773,7 @@ async function persistSale(){
   if(error){ alert('Erro ao salvar venda: '+error.message); return false; }
   if(editing){ Object.assign(editing, data); } else { state.sales.push(data); }
   if(!editing){
-    const firstAmount = parseFloat(document.getElementById('f-first-amount').value)||0;
+    const firstAmount = moneyValue('f-first-amount');
     if(firstAmount>0){
       const p = { id: uid(), saleId: data.id, amount: firstAmount, date: document.getElementById('f-first-date').value||data.date||null,
         paymentMethod: document.getElementById('f-first-method').value||null, notes: document.getElementById('f-first-notes').value.trim() };
@@ -1893,7 +1916,7 @@ function openCommissionPaymentModal(closerId){
       <div class="box"><div class="label">Em aberto</div><div class="val ${open>0.005?'danger':'ok'}">${fmtCurrency(open)}</div></div>
     </div>
     <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
-      <div class="field"><label class="field-label">Valor pago (R$)</label><input type="number" step="0.01" id="f-comm-amount" value="${open>0?open.toFixed(2):''}" placeholder="0,00"></div>
+      <div class="field"><label class="field-label">Valor pago (R$)</label><input type="text" inputmode="decimal" id="f-comm-amount" value="${open>0?fmtMoneyInput(open):''}" placeholder="0,00" onblur="onMoneyBlur(this)"></div>
       <div class="field"><label class="field-label">Data</label><input type="date" id="f-comm-date" value="${new Date().toISOString().slice(0,10)}"></div>
     </div>
     <div class="field"><label class="field-label">Observações</label><input id="f-comm-notes" placeholder="ex: referente a setembro/2026"></div>
@@ -1918,7 +1941,7 @@ function openCommissionPaymentModal(closerId){
 }
 
 async function saveCommissionPayment(closerId){
-  const amount = parseFloat(document.getElementById('f-comm-amount').value)||0;
+  const amount = moneyValue('f-comm-amount');
   if(amount<=0){ alert('Informe o valor pago.'); return; }
   const p = { id: uid(), closerId, amount, date: document.getElementById('f-comm-date').value||null, notes: document.getElementById('f-comm-notes').value.trim() };
   const {error} = await sb.from('commission_payments').insert({id:p.id, closer_id:p.closerId, amount:p.amount, date:p.date, notes:p.notes||null});
@@ -2065,7 +2088,7 @@ function openClassModal(id, courseId){
     </div>
     <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
       <div class="field"><label class="field-label">Vagas (0 = sem limite)</label><input type="number" min="0" step="1" id="f-capacity" value="${cl.capacity||''}" placeholder="0"></div>
-      <div class="field"><label class="field-label">Preço da turma (R$)</label><input type="number" step="0.01" id="f-price" value="${cl.price==null?'':cl.price}" placeholder="vazio = preço do curso"></div>
+      <div class="field"><label class="field-label">Preço da turma (R$)</label><input type="text" inputmode="decimal" id="f-price" value="${cl.price==null?'':fmtMoneyInput(cl.price)}" placeholder="vazio = preço do curso" onblur="onMoneyBlur(this)"></div>
     </div>
     ${editing ? `<div id="class-members">${classMembersSectionHtml(editing.id)}</div>`
               : `<p class="sale-hint" style="margin:0 0 6px;">Salve a turma para começar a adicionar alunas.</p>`}
@@ -2176,14 +2199,14 @@ async function saveClass(){
   if(!name){ alert('Informe o nome da turma.'); return; }
   const courseId = document.getElementById('f-course').value;
   if(!courseId){ alert('Selecione o curso.'); return; }
-  const priceRaw = document.getElementById('f-price').value;
+  const priceEmpty = moneyIsEmpty('f-price');
   const data = {
     id: editing ? editing.id : uid(),
     courseId, name,
     startDate: document.getElementById('f-start').value || null,
     endDate: document.getElementById('f-end').value || null,
     capacity: parseInt(document.getElementById('f-capacity').value,10)||0,
-    price: priceRaw==='' ? null : (parseFloat(priceRaw)||0),
+    price: priceEmpty ? null : moneyValue('f-price'),
   };
   const {error} = await sb.from('course_classes').upsert({id:data.id, course_id:data.courseId, name:data.name, start_date:data.startDate, end_date:data.endDate, capacity:data.capacity, price:data.price});
   if(error){ alert('Erro ao salvar turma: '+error.message); return; }
@@ -2205,7 +2228,7 @@ function openCourseModal(id){
     <h3>${editing?'Editar curso':'Novo curso'}</h3>
     <div class="field"><label class="field-label">Nome do curso</label><input id="f-name" value="${escapeHtml(c.name)}"></div>
     <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
-      <div class="field"><label class="field-label">Preço padrão (R$)</label><input type="number" step="0.01" id="f-price" value="${c.price}"></div>
+      <div class="field"><label class="field-label">Preço padrão (R$)</label><input type="text" inputmode="decimal" id="f-price" value="${fmtMoneyInput(c.price)}" onblur="onMoneyBlur(this)"></div>
       <div class="field"><label class="field-label">Comissão do closer (%)</label><input type="number" step="0.1" min="0" max="100" id="f-commission" value="${c.commissionPercent==null?'':c.commissionPercent}" placeholder="ex: 10"></div>
     </div>
     <p class="sale-hint" style="margin:-4px 0 12px;">A comissão é calculada sobre o valor negociado de cada venda deste curso. Em vendas divididas, cada closer recebe sobre a sua parte.</p>
@@ -2219,7 +2242,7 @@ function openCourseModal(id){
 async function saveCourse(){
   const name = document.getElementById('f-name').value.trim();
   if(!name){ alert('Informe o nome do curso.'); return; }
-  const data = { id: editing ? editing.id : uid(), name, price: parseFloat(document.getElementById('f-price').value)||0, commissionPercent: parseFloat(document.getElementById('f-commission').value)||0 };
+  const data = { id: editing ? editing.id : uid(), name, price: moneyValue('f-price'), commissionPercent: parseFloat(document.getElementById('f-commission').value)||0 };
   const {error} = await sb.from('courses').upsert({id:data.id, name:data.name, price:data.price, commission_percent:data.commissionPercent});
   if(error){ alert('Erro ao salvar curso: '+error.message); return; }
   if(editing){ Object.assign(editing, data); } else { state.courses.push(data); }
