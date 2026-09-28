@@ -458,6 +458,7 @@ function saleShare(sale, closerId){
   return 0;
 }
 function saleClosersLabel(sale){
+  if(!sale.closerId && !sale.closer2Id) return 'Sem closer';
   if(!sale.closer2Id) return closerName(sale.closerId);
   const split = Math.round(Number(sale.splitPercent==null?50:sale.splitPercent));
   return `${closerName(sale.closerId)} + ${closerName(sale.closer2Id)} (${split}/${100-split})`;
@@ -802,6 +803,11 @@ function renderDashboard(){
     const conv = cLeads.length ? Math.round(cSales.length/cLeads.length*100) : 0;
     return {name:c.name, leads:cLeads.length, realizadas:cMeetRealizadas, noshow:cMeetNoShow, vendas:cSales.length, valor:cValor, conv};
   }).sort((a,b)=>b.valor-a.valor);
+  const semCloser = sales.filter(s=>!s.closerId && !s.closer2Id);
+  if(semCloser.length){
+    closerRows.push({name:'Sem closer', leads:0, realizadas:0, noshow:0, vendas:semCloser.length,
+      valor:semCloser.reduce((a,s)=>a+Number(s.value||0),0), conv:0, semCloser:true});
+  }
 
   return `
     <div class="grid-metrics">
@@ -864,10 +870,10 @@ function renderDashboard(){
           <tbody>
           ${closerRows.length ? closerRows.map(r=>`
             <tr>
-              <td style="font-weight:600;color:var(--ink);">${escapeHtml(r.name)}</td>
+              <td style="font-weight:600;${r.semCloser?'color:var(--ink-soft);font-style:italic;font-weight:500;':'color:var(--ink);'}">${escapeHtml(r.name)}</td>
               <td style="text-align:right;">${r.vendas}</td>
               <td class="mono" style="text-align:right;">${fmtPrice(r.valor)}</td>
-              <td style="text-align:right;"><span class="badge b-fechado">${r.conv}%</span></td>
+              <td style="text-align:right;">${r.semCloser?'<span style="color:var(--ink-soft);">—</span>':`<span class="badge b-fechado">${r.conv}%</span>`}</td>
             </tr>`).join('') : `<tr class="empty-row"><td colspan="4">Cadastre closers para ver o desempenho.</td></tr>`}
           </tbody>
         </table>
@@ -1447,7 +1453,7 @@ function renderSales(){
           <tr>
             <td style="font-weight:600;color:var(--ink);">${escapeHtml(s.studentName)}</td>
             <td>${escapeHtml(courseName(s.courseId))}${cls?`<div style="font-size:11.5px;color:var(--ink-soft);">${escapeHtml(classLabel(cls))}</div>`:''}</td>
-            <td>${escapeHtml(saleClosersLabel(s))}</td>
+            <td${(!s.closerId && !s.closer2Id)?' style="color:var(--ink-soft);font-style:italic;"':''}>${escapeHtml(saleClosersLabel(s))}</td>
             <td class="mono" style="color:var(--gold);font-weight:600;">${fmtCurrency(s.value)}${discount?`<div style="font-size:10.5px;color:var(--ink-soft);font-weight:400;">desc. ${fmtCurrency(discount)}</div>`:''}</td>
             <td class="mono">${fmtCurrency(paid)}</td>
             <td class="mono" style="${open>0?'color:var(--danger);font-weight:600;':''}">${fmtCurrency(open)}</td>
@@ -1480,7 +1486,8 @@ function applySalesFilter(list){
   return list.filter(s=>{
     if(q && !(s.studentName||'').toLowerCase().includes(q)) return false;
     if(salesFilter.classId && s.classId!==salesFilter.classId) return false;
-    if(salesFilter.closerId && s.closerId!==salesFilter.closerId && s.closer2Id!==salesFilter.closerId) return false;
+    if(salesFilter.closerId==='__none__'){ if(s.closerId || s.closer2Id) return false; }
+    else if(salesFilter.closerId && s.closerId!==salesFilter.closerId && s.closer2Id!==salesFilter.closerId) return false;
     if(salesFilter.from && (s.date||'') < salesFilter.from) return false;
     if(salesFilter.to && (s.date||'') > salesFilter.to) return false;
     return true;
@@ -1494,7 +1501,7 @@ function salesFiltersHtml(){
     <div class="sales-filters">
       <div class="f grow"><label for="sales-f-name">Aluna</label><input type="text" id="sales-f-name" value="${escapeHtml(salesFilter.name)}" oninput="setSalesFilter('name', this.value)" placeholder="Buscar por nome..."></div>
       <div class="f"><label for="sales-f-classId">Turma</label><select id="sales-f-classId" onchange="setSalesFilter('classId', this.value)"><option value="">Todas</option>${classes.map(c=>`<option value="${c.id}" ${salesFilter.classId===c.id?'selected':''}>${escapeHtml(courseFilter==='all' ? courseName(c.courseId)+' · ' : '')}${escapeHtml(classLabel(c))}</option>`).join('')}</select></div>
-      ${currentUser.role==='admin' ? `<div class="f"><label for="sales-f-closerId">Closer</label><select id="sales-f-closerId" onchange="setSalesFilter('closerId', this.value)"><option value="">Todos</option>${state.closers.map(c=>`<option value="${c.id}" ${salesFilter.closerId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div>` : ''}
+      ${currentUser.role==='admin' ? `<div class="f"><label for="sales-f-closerId">Closer</label><select id="sales-f-closerId" onchange="setSalesFilter('closerId', this.value)"><option value="">Todos</option><option value="__none__" ${salesFilter.closerId==='__none__'?'selected':''}>Sem closer</option>${state.closers.map(c=>`<option value="${c.id}" ${salesFilter.closerId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div>` : ''}
       <div class="f"><label for="sales-f-from">De</label><input type="date" id="sales-f-from" value="${salesFilter.from}" onchange="setSalesFilter('from', this.value)"></div>
       <div class="f"><label for="sales-f-to">Até</label><input type="date" id="sales-f-to" value="${salesFilter.to}" onchange="setSalesFilter('to', this.value)"></div>
       ${active ? `<div class="f"><label>&nbsp;</label><button type="button" class="ghost" style="border:1px solid var(--border);" onclick="clearSalesFilter()">Limpar filtros</button></div>` : ''}
@@ -1545,7 +1552,7 @@ function openSaleModal(id){
       <div class="field"><label class="field-label">Turma</label><select id="f-class" onchange="onSaleClassChange()">${saleClassOptionsHtml(s.courseId, s.classId)}</select></div>
     </div>
     <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
-      <div class="field"><label class="field-label">Closer</label><select id="f-closer" onchange="updateSplitUI()">${state.closers.map(c=>`<option value="${c.id}" ${s.closerId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('') || '<option value="">Cadastre um closer</option>'}</select></div>
+      <div class="field"><label class="field-label">Closer</label><select id="f-closer" onchange="updateSplitUI()"><option value="" ${!s.closerId?'selected':''}>— sem closer —</option>${state.closers.map(c=>`<option value="${c.id}" ${s.closerId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div>
       <div class="field"><label class="field-label">Closer 2 (dividir comissão)</label><select id="f-closer2" onchange="updateSplitUI()"><option value="">— sem divisão —</option>${state.closers.map(c=>`<option value="${c.id}" ${s.closer2Id===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('')}</select></div>
     </div>
     <div id="split-row" class="field" style="display:none;">
@@ -1589,7 +1596,12 @@ function openSaleModal(id){
 
 function updateSplitUI(){
   const row = document.getElementById('split-row'); if(!row) return;
-  const c1 = document.getElementById('f-closer').value, c2 = document.getElementById('f-closer2').value;
+  const c1 = document.getElementById('f-closer').value;
+  const sel2 = document.getElementById('f-closer2');
+  if(!c1 && sel2.value){ sel2.value = ''; }
+  sel2.disabled = !c1;
+  sel2.title = c1 ? '' : 'Escolha o closer 1 para dividir a comissão.';
+  const c2 = sel2.value;
   row.style.display = c2 ? 'block' : 'none';
   if(!c2) return;
   const split = Math.min(99, Math.max(1, parseInt(document.getElementById('f-split').value,10)||50));
@@ -1743,7 +1755,7 @@ async function persistSale(){
   if(!studentName){ alert('Informe o nome da aluna.'); return false; }
   const leadId = document.getElementById('f-lead').value;
   const closerId = document.getElementById('f-closer').value;
-  const closer2Id = document.getElementById('f-closer2').value || '';
+  const closer2Id = closerId ? (document.getElementById('f-closer2').value || '') : '';
   if(closer2Id && closer2Id===closerId){ alert('O closer 2 precisa ser diferente do closer 1.'); return false; }
   const splitPercent = closer2Id ? Math.min(99, Math.max(1, parseInt(document.getElementById('f-split').value,10)||50)) : 100;
   const classId = document.getElementById('f-class').value || '';
@@ -1845,6 +1857,9 @@ function renderCommissions(){
   // A aba ignora o filtro de curso do topo: o saldo de comissão é sempre sobre todas as vendas do closer.
   const sales = scopeByRole(state.sales);
   const semPct = state.courses.filter(c=>!(Number(c.commissionPercent||0)>0));
+  const semCloserSales = sales.filter(s=>!s.closerId && !s.closer2Id);
+  const semCloserQty = semCloserSales.length;
+  const semCloserVal = semCloserSales.reduce((a,s)=>a+Number(s.value||0),0);
   const rows = state.closers.map(c=>{
     const cSales = sales.filter(s=>saleShare(s,c.id)>0);
     const total = cSales.reduce((a,s)=>a+Number(s.value||0)*saleShare(s,c.id),0);
@@ -1866,7 +1881,7 @@ function renderCommissions(){
   const isAdmin = currentUser.role==='admin';
   return `
     ${toolbarHtml('Comissionamento','Novo closer','openCloserModal()')}
-    <div class="pill-note">Comissão = valor negociado da venda × percentual de comissão do <strong>curso</strong> (definido em Cursos). Em vendas com comissão dividida, cada closer recebe sobre a sua parte. Esta aba considera todos os cursos, independente do filtro no topo.${semPct.length?` <strong>Atenção:</strong> sem percentual definido: ${semPct.map(c=>escapeHtml(c.name)).join(', ')}.`:''}</div>
+    <div class="pill-note">Comissão = valor negociado da venda × percentual de comissão do <strong>curso</strong> (definido em Cursos). Em vendas com comissão dividida, cada closer recebe sobre a sua parte. Vendas sem closer não geram comissão. Esta aba considera todos os cursos, independente do filtro no topo.${semPct.length?` <strong>Atenção:</strong> sem percentual definido: ${semPct.map(c=>escapeHtml(c.name)).join(', ')}.`:''}${semCloserQty?` ${semCloserQty} venda${semCloserQty===1?'':'s'} sem closer (${fmtCurrency(semCloserVal)}) não entra${semCloserQty===1?'':'m'} no cálculo.`:''}</div>
     <div class="grid-metrics">
       <div class="metric"><div class="label">Comissão gerada</div><div class="value gold mono">${fmtCurrency(totGerada)}</div></div>
       <div class="metric"><div class="label">Já paga</div><div class="value teal mono">${fmtCurrency(totPaga)}</div></div>
