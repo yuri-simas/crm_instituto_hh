@@ -107,3 +107,9 @@ create index if not exists commission_payments_closer_id_idx on commission_payme
 alter table commission_payments enable row level security;
 drop policy if exists authenticated_all on commission_payments;
 create policy authenticated_all on commission_payments for all to authenticated using (true) with check (true);
+
+-- ========== 10) NOTA FISCAL POR ALUNA NA TURMA ==========
+-- Marca se a NF daquela aluna já foi emitida. Fica na venda quando a aluna entrou por venda,
+-- e na matrícula manual quando não há venda vinculada.
+alter table sales add column if not exists nf_issued boolean default false;
+alter table class_enrollments add column if not exists nf_issued boolean default false;

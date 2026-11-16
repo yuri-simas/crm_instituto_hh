@@ -109,6 +109,10 @@ tbody tr:last-child td{border-bottom:none;}
 .class-students summary{cursor:pointer;color:var(--teal);font-weight:600;list-style:none;}
 .class-students summary::-webkit-details-marker{display:none;}
 .class-students ul{margin:6px 0 0;padding-left:16px;}
+.class-students li{margin-bottom:3px;}
+.nf-check{display:inline-flex;align-items:center;gap:4px;cursor:pointer;font-size:10.5px;color:var(--ink-soft);user-select:none;}
+.nf-check input{width:13px;height:13px;margin:0;cursor:pointer;accent-color:var(--teal);}
+.nf-check.on{color:#2F6B45;font-weight:600;}
 .pay-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0 10px;}
 .pay-summary .box{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;}
 .pay-summary .box .label{font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-soft);}
@@ -482,6 +486,30 @@ function classMembers(classId){
   return members.sort((a,b)=>(a.name||'').localeCompare(b.name||'','pt-BR'));
 }
 function classOccupancy(classId){ return classMembers(classId).length; }
+function memberNf(m){ return m.sale ? !!m.sale.nfIssued : !!(m.enrollment && m.enrollment.nfIssued); }
+function classNfCount(classId){ const ms=classMembers(classId); return {emitidas: ms.filter(memberNf).length, total: ms.length}; }
+function nfCheckHtml(classId, m, onChange){
+  const on = memberNf(m);
+  const canEdit = currentUser.role==='admin';
+  if(!canEdit) return `<span class="nf-check ${on?'on':''}" title="${on?'NF emitida':'NF pendente'}">${on?'✓ NF':'NF pendente'}</span>`;
+  return `<label class="nf-check ${on?'on':''}" title="${on?'NF emitida':'Marcar quando a NF for emitida'}"><input type="checkbox" ${on?'checked':''} onchange="toggleMemberNf('${classId}','${m.key}',this,${onChange?'true':'false'})">NF</label>`;
+}
+async function toggleMemberNf(classId, key, el, fromModal){
+  const want = el.checked;
+  const isSale = key.startsWith('s:');
+  const target = isSale ? state.sales.find(x=>x.id===key.slice(2)) : state.classEnrollments.find(x=>x.id===key.slice(2));
+  if(!target){ el.checked = !want; return; }
+  const {error} = isSale
+    ? await sb.from('sales').update({nf_issued:want}).eq('id', target.id)
+    : await sb.from('class_enrollments').update({nf_issued:want}).eq('id', target.id);
+  if(error){ alert('Erro ao salvar a NF: '+error.message); el.checked = !want; return; }
+  target.nfIssued = want;
+  const label = el.closest('.nf-check');
+  if(label) label.classList.toggle('on', want);
+  if(fromModal){ refreshClassMembers(classId); return; }
+  const counter = document.getElementById('nf-count-'+classId);
+  if(counter){ const c = classNfCount(classId); counter.textContent = `NF ${c.emitidas}/${c.total}`; counter.className = 'badge ' + (c.emitidas>=c.total ? 'b-quitado' : (c.emitidas ? 'b-parcial' : 'b-aberto')); }
+}
 function classPrice(cls){ if(!cls) return null; if(cls.price!=null && cls.price!=='') return Number(cls.price); const c=state.courses.find(c=>c.id===cls.courseId); return c?Number(c.price||0):null; }
 function salePayments(saleId){ return state.salePayments.filter(p=>p.saleId===saleId).sort((a,b)=>(a.date||'').localeCompare(b.date||'')); }
 function salePaid(saleId){ return salePayments(saleId).reduce((a,p)=>a+Number(p.amount||0),0); }
@@ -559,10 +587,10 @@ async function loadState(){
         courseIds: leadCoursesR.data.filter(lc=>lc.lead_id===r.id).map(lc=>lc.course_id),
       })),
       meetings: meetingsR.data.map(r=>({id:r.id, leadId:r.lead_id, closerId:r.closer_id||'', scheduledDate:r.scheduled_date, status:r.status, notes:r.notes})),
-      sales: salesR.data.map(r=>({id:r.id, studentName:r.student_name, leadId:r.lead_id, courseId:r.course_id, classId:r.class_id||'', closerId:r.closer_id, closer2Id:r.closer2_id||'', splitPercent:r.split_percent==null?100:Number(r.split_percent), value:r.value, listPrice:r.list_price, paymentMethod:r.payment_method, date:r.date, notes:r.notes||''})),
+      sales: salesR.data.map(r=>({nfIssued:!!r.nf_issued, id:r.id, studentName:r.student_name, leadId:r.lead_id, courseId:r.course_id, classId:r.class_id||'', closerId:r.closer_id, closer2Id:r.closer2_id||'', splitPercent:r.split_percent==null?100:Number(r.split_percent), value:r.value, listPrice:r.list_price, paymentMethod:r.payment_method, date:r.date, notes:r.notes||''})),
       classes: classesR.data.map(r=>({id:r.id, courseId:r.course_id, name:r.name, startDate:r.start_date, endDate:r.end_date, capacity:r.capacity||0, price:r.price})),
       salePayments: salePaymentsR.data.map(r=>({id:r.id, saleId:r.sale_id, amount:r.amount, date:r.date, paymentMethod:r.payment_method, notes:r.notes||''})),
-      classEnrollments: enrollmentsR.data.map(r=>({id:r.id, classId:r.class_id, studentId:r.student_id, notes:r.notes||''})),
+      classEnrollments: enrollmentsR.data.map(r=>({id:r.id, classId:r.class_id, studentId:r.student_id, notes:r.notes||'', nfIssued:!!r.nf_issued})),
       commissionPayments: commPaymentsR.data.map(r=>({id:r.id, closerId:r.closer_id, amount:Number(r.amount||0), date:r.date, notes:r.notes||''})),
       students: await Promise.all(studentsR.data.map(async r=>({
         id:r.id, name:r.name, phone:r.phone, phones:(Array.isArray(r.phones)&&r.phones.length)?r.phones:(r.phone?[r.phone]:[]), email:r.email, cpf:r.cpf, professionalRegistration:r.professional_registration, cep:r.cep, address:r.address,
@@ -2062,13 +2090,14 @@ function renderClasses(){
     </div>
     <div class="card">
       <table>
-        <thead><tr><th>Curso</th><th>Turma</th><th>Início</th><th>Término</th><th style="white-space:nowrap;">Preço ${eyeBtnHtml()}</th><th>Vagas</th><th>Alunas</th>${isAdmin?'<th></th>':''}</tr></thead>
+        <thead><tr><th>Curso</th><th>Turma</th><th>Início</th><th>Término</th><th style="white-space:nowrap;">Preço ${eyeBtnHtml()}</th><th>Vagas</th><th>NF</th><th>Alunas</th>${isAdmin?'<th></th>':''}</tr></thead>
         <tbody>
         ${rows.length ? rows.map(cl=>{
           const members = classMembers(cl.id), qty = members.length, cap = Number(cl.capacity||0);
           const full = cap>0 && qty>=cap, past = isPast(cl);
           const price = classPrice(cl);
           const aberto = members.reduce((a,m)=>a+(m.sale?saleOpen(m.sale):0),0);
+          const nf = classNfCount(cl.id);
           return `
           <tr style="${past?'opacity:.6;':''}">
             <td>${escapeHtml(courseName(cl.courseId))}</td>
@@ -2077,12 +2106,13 @@ function renderClasses(){
             <td class="mono">${fmtDate(cl.endDate)}</td>
             <td class="mono">${price!=null?fmtPrice(price):'—'}${(cl.price==null||cl.price==='')?'<div style="font-size:10.5px;color:var(--ink-soft);">padrão do curso</div>':''}</td>
             <td>${cap ? `<span class="badge ${full?'b-lotada':'b-fechado'}">${qty}/${cap}${full?' · lotada':''}</span>` : `<span class="badge b-novo">${qty} · sem limite</span>`}</td>
-            <td>${qty ? `<details class="class-students"><summary>ver ${qty} aluna${qty===1?'':'s'}${aberto>0?` · ${fmtCurrency(aberto)} em aberto`:''}</summary><ul>${members.map(m=>{ if(!m.sale) return `<li>${escapeHtml(m.name)} <span class="badge b-novo" style="font-size:10px;padding:1px 6px;">Manual</span></li>`; const st=salePayStatus(m.sale); return `<li>${escapeHtml(m.name)} <span class="badge ${st.cls}" style="font-size:10px;padding:1px 6px;">${st.label}${st.label!=='Quitado'?' · '+fmtCurrency(saleOpen(m.sale)):''}</span></li>`; }).join('')}</ul></details>` : '<span style="color:var(--ink-soft);">—</span>'}</td>
+            <td>${qty ? `<span class="badge ${nf.emitidas>=nf.total?'b-quitado':(nf.emitidas?'b-parcial':'b-aberto')}" id="nf-count-${cl.id}">NF ${nf.emitidas}/${nf.total}</span>` : '<span style="color:var(--ink-soft);">—</span>'}</td>
+            <td>${qty ? `<details class="class-students"><summary>ver ${qty} aluna${qty===1?'':'s'}${aberto>0?` · ${fmtCurrency(aberto)} em aberto`:''}</summary><ul>${members.map(m=>{ const nfh = nfCheckHtml(cl.id, m, false); const badge = m.sale ? (()=>{ const st=salePayStatus(m.sale); return `<span class="badge ${st.cls}" style="font-size:10px;padding:1px 6px;">${st.label}${st.label!=='Quitado'?' · '+fmtCurrency(saleOpen(m.sale)):''}</span>`; })() : '<span class="badge b-novo" style="font-size:10px;padding:1px 6px;">Manual</span>'; return `<li>${escapeHtml(m.name)} ${badge} ${nfh}</li>`; }).join('')}</ul></details>` : '<span style="color:var(--ink-soft);">—</span>'}</td>
             ${isAdmin ? `<td style="text-align:right;white-space:nowrap;">
               <button class="ghost" onclick="openClassModal('${cl.id}')">Editar</button>
               <button class="danger-ghost" onclick="deleteItem('classes','${cl.id}')">Excluir</button>
             </td>` : ''}
-          </tr>`;}).join('') : `<tr class="empty-row"><td colspan="${isAdmin?8:7}">${classesView==='upcoming'?'Nenhuma turma próxima.':'Nenhuma turma cadastrada.'}${isAdmin?' Clique em "Nova turma" para cadastrar.':''}</td></tr>`}
+          </tr>`;}).join('') : `<tr class="empty-row"><td colspan="${isAdmin?9:8}">${classesView==='upcoming'?'Nenhuma turma próxima.':'Nenhuma turma cadastrada.'}${isAdmin?' Clique em "Nova turma" para cadastrar.':''}</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -2122,10 +2152,10 @@ function classMembersSectionHtml(classId){
   const looseSales = state.sales.filter(s=>s.courseId===cl.courseId && !s.classId && !inClass.has((s.studentName||'').trim().toLowerCase()));
   const freeStudents = state.students.filter(st=>!inClass.has((st.name||'').trim().toLowerCase())).sort((a,b)=>a.name.localeCompare(b.name,'pt-BR'));
   return `
-    <div class="section-head" style="margin-top:6px;margin-bottom:8px;"><h3 style="font-size:15px;">Alunas na turma <span style="color:var(--ink-soft);font-weight:400;">(${members.length}${cap?'/'+cap:''})</span></h3></div>
+    <div class="section-head" style="margin-top:6px;margin-bottom:8px;"><h3 style="font-size:15px;">Alunas na turma <span style="color:var(--ink-soft);font-weight:400;">(${members.length}${cap?'/'+cap:''})</span></h3>${members.length?`<span class="badge ${classNfCount(classId).emitidas>=members.length?'b-quitado':(classNfCount(classId).emitidas?'b-parcial':'b-aberto')}">NF ${classNfCount(classId).emitidas}/${members.length}</span>`:''}</div>
     <div class="pay-list">
       <table>
-        <thead><tr><th>Aluna</th><th>Origem</th><th></th></tr></thead>
+        <thead><tr><th>Aluna</th><th>Origem</th><th>NF emitida</th><th></th></tr></thead>
         <tbody>
         ${members.length ? members.map(m=>{
           let origem;
@@ -2134,8 +2164,9 @@ function classMembersSectionHtml(classId){
           return `<tr>
             <td style="font-weight:600;color:var(--ink);">${escapeHtml(m.name)}</td>
             <td>${origem}</td>
+            <td>${nfCheckHtml(classId, m, true)}</td>
             <td style="text-align:right;"><button type="button" class="danger-ghost" onclick="removeClassMember('${classId}','${m.key}')">Remover</button></td>
-          </tr>`;}).join('') : `<tr class="empty-row"><td colspan="3" style="padding:14px;">Nenhuma aluna nesta turma.</td></tr>`}
+          </tr>`;}).join('') : `<tr class="empty-row"><td colspan="4" style="padding:14px;">Nenhuma aluna nesta turma.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -2494,7 +2525,7 @@ async function importBackupFile(input){
     if((parsed.sales||[]).length){
       const {error} = await sb.from('sales').insert(parsed.sales.map(s=>({
         id:s.id, student_name:s.studentName, lead_id:s.leadId||null, course_id:s.courseId||null, class_id:s.classId||null,
-        closer_id:s.closerId||null, closer2_id:s.closer2Id||null, split_percent:(s.splitPercent==null?100:s.splitPercent),
+        closer_id:s.closerId||null, closer2_id:s.closer2Id||null, split_percent:(s.splitPercent==null?100:s.splitPercent), nf_issued:!!s.nfIssued,
         value:s.value||0, list_price:(s.listPrice==null||s.listPrice==='')?null:s.listPrice,
         payment_method:s.paymentMethod||null, date:s.date||null, notes:s.notes||null,
       })));
@@ -2527,7 +2558,7 @@ async function importBackupFile(input){
       if(error) throw error;
     }
     if((parsed.classEnrollments||[]).length){
-      const {error} = await sb.from('class_enrollments').insert(parsed.classEnrollments.map(e=>({id:e.id, class_id:e.classId, student_id:e.studentId, notes:e.notes||null})));
+      const {error} = await sb.from('class_enrollments').insert(parsed.classEnrollments.map(e=>({id:e.id, class_id:e.classId, student_id:e.studentId, notes:e.notes||null, nf_issued:!!e.nfIssued})));
       if(error) throw error;
     }
   }catch(e){
