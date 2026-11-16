@@ -113,3 +113,19 @@ create policy authenticated_all on commission_payments for all to authenticated 
 -- e na matrícula manual quando não há venda vinculada.
 alter table sales add column if not exists nf_issued boolean default false;
 alter table class_enrollments add column if not exists nf_issued boolean default false;
+
+-- ========== 11) CUSTOS POR TURMA ==========
+-- Cada turma pode ter custos próprios (aluguel, coffee break, material...).
+-- O lucro da turma = receita das vendas - comissões dos closers - soma destes custos.
+create table if not exists class_costs (
+  id text primary key,
+  class_id text references course_classes(id) on delete cascade,
+  description text,
+  amount numeric not null default 0,
+  date date,
+  created_at timestamptz default now()
+);
+create index if not exists class_costs_class_id_idx on class_costs(class_id);
+alter table class_costs enable row level security;
+drop policy if exists authenticated_all on class_costs;
+create policy authenticated_all on class_costs for all to authenticated using (true) with check (true);

@@ -113,6 +113,18 @@ tbody tr:last-child td{border-bottom:none;}
 .nf-check{display:inline-flex;align-items:center;gap:4px;cursor:pointer;font-size:10.5px;color:var(--ink-soft);user-select:none;}
 .nf-check input{width:13px;height:13px;margin:0;cursor:pointer;accent-color:var(--teal);}
 .nf-check.on{color:#2F6B45;font-weight:600;}
+.result-box{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0;}
+.result-box .box{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;}
+.result-box .box .label{font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-soft);}
+.result-box .box .val{font-family:'IBM Plex Mono',monospace;font-size:15px;font-weight:600;margin-top:2px;color:var(--ink);}
+.result-box .box .val.gold{color:var(--gold);}
+.result-box .box .val.danger{color:var(--danger);}
+.result-box .box .val.ok{color:#2F6B45;}
+.cost-add{display:grid;grid-template-columns:1.6fr 1fr 1fr auto;gap:6px;align-items:end;}
+.cost-add label{font-size:10.5px;color:var(--ink-soft);display:block;margin-bottom:3px;}
+.cost-add input{width:100%;}
+.result-detail{font-size:11.5px;color:var(--ink-soft);}
+.result-detail b{font-family:'IBM Plex Mono',monospace;font-weight:600;}
 .pay-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0 10px;}
 .pay-summary .box{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;}
 .pay-summary .box .label{font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-soft);}
@@ -486,6 +498,16 @@ function classMembers(classId){
   return members.sort((a,b)=>(a.name||'').localeCompare(b.name||'','pt-BR'));
 }
 function classOccupancy(classId){ return classMembers(classId).length; }
+function classCosts(classId){ return state.classCosts.filter(c=>c.classId===classId).sort((a,b)=>(a.date||'').localeCompare(b.date||'')); }
+function classResult(classId){
+  const sales = classSales(classId);
+  const receita = sales.reduce((a,s)=>a+Number(s.value||0),0);
+  const recebido = sales.reduce((a,s)=>a+Math.min(Number(s.value||0), salePaid(s.id)),0);
+  const comissoes = sales.reduce((a,s)=>a+saleCommission(s,s.closerId)+saleCommission(s,s.closer2Id),0);
+  const custos = classCosts(classId).reduce((a,c)=>a+Number(c.amount||0),0);
+  const lucro = receita - comissoes - custos;
+  return {receita, recebido, comissoes, custos, lucro, margem: receita>0 ? (lucro/receita*100) : 0, qtdCustos: classCosts(classId).length};
+}
 function memberNf(m){ return m.sale ? !!m.sale.nfIssued : !!(m.enrollment && m.enrollment.nfIssued); }
 function classNfCount(classId){ const ms=classMembers(classId); return {emitidas: ms.filter(memberNf).length, total: ms.length}; }
 function nfCheckHtml(classId, m, onChange){
@@ -540,6 +562,7 @@ function defaultState(){
     salePayments: [],
     classEnrollments: [],
     commissionPayments: [],
+    classCosts: [],
   };
 }
 
@@ -554,7 +577,7 @@ async function rowToHistory(h){
 
 async function loadState(){
   try{
-    const [coursesR, paymentsR, closersR, usersR, leadsR, leadCoursesR, meetingsR, salesR, studentsR, historyR, classesR, salePaymentsR, enrollmentsR, commPaymentsR] = await Promise.all([
+    const [coursesR, paymentsR, closersR, usersR, leadsR, leadCoursesR, meetingsR, salesR, studentsR, historyR, classesR, salePaymentsR, enrollmentsR, commPaymentsR, classCostsR] = await Promise.all([
       sb.from('courses').select('*'),
       sb.from('payment_methods').select('*'),
       sb.from('closers').select('*'),
@@ -569,8 +592,9 @@ async function loadState(){
       sb.from('sale_payments').select('*'),
       sb.from('class_enrollments').select('*'),
       sb.from('commission_payments').select('*'),
+      sb.from('class_costs').select('*'),
     ]);
-    const results = [coursesR,paymentsR,closersR,usersR,leadsR,leadCoursesR,meetingsR,salesR,studentsR,historyR,classesR,salePaymentsR,enrollmentsR,commPaymentsR];
+    const results = [coursesR,paymentsR,closersR,usersR,leadsR,leadCoursesR,meetingsR,salesR,studentsR,historyR,classesR,salePaymentsR,enrollmentsR,commPaymentsR,classCostsR];
     const firstError = results.find(r=>r.error);
     if(firstError) throw firstError.error;
 
@@ -592,6 +616,7 @@ async function loadState(){
       salePayments: salePaymentsR.data.map(r=>({id:r.id, saleId:r.sale_id, amount:r.amount, date:r.date, paymentMethod:r.payment_method, notes:r.notes||''})),
       classEnrollments: enrollmentsR.data.map(r=>({id:r.id, classId:r.class_id, studentId:r.student_id, notes:r.notes||'', nfIssued:!!r.nf_issued})),
       commissionPayments: commPaymentsR.data.map(r=>({id:r.id, closerId:r.closer_id, amount:Number(r.amount||0), date:r.date, notes:r.notes||''})),
+      classCosts: classCostsR.data.map(r=>({id:r.id, classId:r.class_id, description:r.description||'', amount:Number(r.amount||0), date:r.date})),
       students: await Promise.all(studentsR.data.map(async r=>({
         id:r.id, name:r.name, phone:r.phone, phones:(Array.isArray(r.phones)&&r.phones.length)?r.phones:(r.phone?[r.phone]:[]), email:r.email, cpf:r.cpf, professionalRegistration:r.professional_registration, cep:r.cep, address:r.address,
         courseHistory: await Promise.all(historyR.data.filter(h=>h.student_id===r.id).map(rowToHistory)),
@@ -2075,6 +2100,7 @@ function renderClasses(){
   const totCap = upcoming.reduce((a,c)=>a+Number(c.capacity||0),0);
   const totOcc = upcoming.reduce((a,c)=>a+classOccupancy(c.id),0);
   const totFree = upcoming.reduce((a,c)=>{ const cap=Number(c.capacity||0); return a + (cap ? Math.max(0, cap-classOccupancy(c.id)) : 0); },0);
+  const lucroPrevisto = upcoming.reduce((a,c)=>a+classResult(c.id).lucro,0);
   return `
     <div class="toolbar">
       <div class="view-toggle">
@@ -2087,10 +2113,11 @@ function renderClasses(){
       <div class="metric"><div class="label">Turmas próximas</div><div class="value mono">${upcoming.length}</div></div>
       <div class="metric"><div class="label">Alunas matriculadas</div><div class="value teal mono">${totOcc}</div></div>
       <div class="metric"><div class="label">Vagas disponíveis</div><div class="value ${totCap&&totFree===0?'danger':'gold'} mono">${totCap?totFree:'—'}</div></div>
+      ${currentUser.role==='admin' ? `<div class="metric"><div class="label">Lucro previsto (próximas)</div><div class="value ${lucroPrevisto>=0?'teal':'danger'} mono">${fmtPrice(lucroPrevisto)}</div></div>` : ''}
     </div>
     <div class="card">
       <table>
-        <thead><tr><th>Curso</th><th>Turma</th><th>Início</th><th>Término</th><th style="white-space:nowrap;">Preço ${eyeBtnHtml()}</th><th>Vagas</th><th>NF</th><th>Alunas</th>${isAdmin?'<th></th>':''}</tr></thead>
+        <thead><tr><th>Curso</th><th>Turma</th><th>Início</th><th>Término</th><th style="white-space:nowrap;">Preço ${eyeBtnHtml()}</th><th>Vagas</th><th>NF</th><th>Alunas</th>${isAdmin?'<th>Resultado</th><th></th>':''}</tr></thead>
         <tbody>
         ${rows.length ? rows.map(cl=>{
           const members = classMembers(cl.id), qty = members.length, cap = Number(cl.capacity||0);
@@ -2098,6 +2125,7 @@ function renderClasses(){
           const price = classPrice(cl);
           const aberto = members.reduce((a,m)=>a+(m.sale?saleOpen(m.sale):0),0);
           const nf = classNfCount(cl.id);
+          const res = classResult(cl.id);
           return `
           <tr style="${past?'opacity:.6;':''}">
             <td>${escapeHtml(courseName(cl.courseId))}</td>
@@ -2108,11 +2136,18 @@ function renderClasses(){
             <td>${cap ? `<span class="badge ${full?'b-lotada':'b-fechado'}">${qty}/${cap}${full?' · lotada':''}</span>` : `<span class="badge b-novo">${qty} · sem limite</span>`}</td>
             <td>${qty ? `<span class="badge ${nf.emitidas>=nf.total?'b-quitado':(nf.emitidas?'b-parcial':'b-aberto')}" id="nf-count-${cl.id}">NF ${nf.emitidas}/${nf.total}</span>` : '<span style="color:var(--ink-soft);">—</span>'}</td>
             <td>${qty ? `<details class="class-students"><summary>ver ${qty} aluna${qty===1?'':'s'}${aberto>0?` · ${fmtCurrency(aberto)} em aberto`:''}</summary><ul>${members.map(m=>{ const nfh = nfCheckHtml(cl.id, m, false); const badge = m.sale ? (()=>{ const st=salePayStatus(m.sale); return `<span class="badge ${st.cls}" style="font-size:10px;padding:1px 6px;">${st.label}${st.label!=='Quitado'?' · '+fmtCurrency(saleOpen(m.sale)):''}</span>`; })() : '<span class="badge b-novo" style="font-size:10px;padding:1px 6px;">Manual</span>'; return `<li>${escapeHtml(m.name)} ${badge} ${nfh}</li>`; }).join('')}</ul></details>` : '<span style="color:var(--ink-soft);">—</span>'}</td>
-            ${isAdmin ? `<td style="text-align:right;white-space:nowrap;">
+            ${isAdmin ? `<td>${qty||res.custos ? `<details class="class-students"><summary><span class="mono" style="color:${res.lucro>=0?'#2F6B45':'var(--danger)'};font-weight:600;">${fmtPrice(res.lucro)}</span></summary><div class="result-detail" style="margin-top:4px;">
+                Receita <b>${fmtPrice(res.receita)}</b><br>
+                − Comissões <b>${fmtPrice(res.comissoes)}</b><br>
+                − Custos (${res.qtdCustos}) <b>${fmtPrice(res.custos)}</b><br>
+                = Lucro <b style="color:${res.lucro>=0?'#2F6B45':'var(--danger)'};">${fmtPrice(res.lucro)}</b>${res.receita>0?` · margem ${res.margem.toFixed(1)}%`:''}<br>
+                <span style="color:var(--ink-soft);">recebido até agora: ${fmtPrice(res.recebido)}</span>
+              </div></details>` : '<span style="color:var(--ink-soft);">—</span>'}</td>
+            <td style="text-align:right;white-space:nowrap;">
               <button class="ghost" onclick="openClassModal('${cl.id}')">Editar</button>
               <button class="danger-ghost" onclick="deleteItem('classes','${cl.id}')">Excluir</button>
             </td>` : ''}
-          </tr>`;}).join('') : `<tr class="empty-row"><td colspan="${isAdmin?9:8}">${classesView==='upcoming'?'Nenhuma turma próxima.':'Nenhuma turma cadastrada.'}${isAdmin?' Clique em "Nova turma" para cadastrar.':''}</td></tr>`}
+          </tr>`;}).join('') : `<tr class="empty-row"><td colspan="${isAdmin?10:8}">${classesView==='upcoming'?'Nenhuma turma próxima.':'Nenhuma turma cadastrada.'}${isAdmin?' Clique em "Nova turma" para cadastrar.':''}</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -2135,14 +2170,75 @@ function openClassModal(id, courseId){
       <div class="field"><label class="field-label">Vagas (0 = sem limite)</label><input type="number" min="0" step="1" id="f-capacity" value="${cl.capacity||''}" placeholder="0"></div>
       <div class="field"><label class="field-label">Preço da turma (R$)</label><input type="text" inputmode="decimal" id="f-price" value="${cl.price==null?'':fmtMoneyInput(cl.price)}" placeholder="vazio = preço do curso" onblur="onMoneyBlur(this)"></div>
     </div>
-    ${editing ? `<div id="class-members">${classMembersSectionHtml(editing.id)}</div>`
-              : `<p class="sale-hint" style="margin:0 0 6px;">Salve a turma para começar a adicionar alunas.</p>`}
+    ${editing ? `<div id="class-members">${classMembersSectionHtml(editing.id)}</div><div id="class-costs">${classCostsSectionHtml(editing.id)}</div>`
+              : `<p class="sale-hint" style="margin:0 0 6px;">Salve a turma para começar a adicionar alunas e lançar custos.</p>`}
     <div class="modal-actions">
       <button onclick="closeModal()">Cancelar</button>
       <button class="primary" onclick="saveClass()">Salvar</button>
     </div>`;
   if(editing) document.getElementById('modal').classList.add('wide');
   openModal();
+}
+
+function classCostsSectionHtml(classId){
+  const costs = classCosts(classId);
+  const res = classResult(classId);
+  const today = new Date().toISOString().slice(0,10);
+  return `
+    <div class="section-head" style="margin-top:14px;margin-bottom:8px;"><h3 style="font-size:15px;">Custos da turma</h3>${costs.length?`<span class="mono" style="font-size:13px;color:var(--danger);font-weight:600;">${fmtCurrency(res.custos)}</span>`:''}</div>
+    <div class="pay-list">
+      <table>
+        <thead><tr><th>Descrição</th><th>Data</th><th>Valor</th><th></th></tr></thead>
+        <tbody>
+        ${costs.length ? costs.map(c=>`<tr>
+          <td style="font-weight:600;color:var(--ink);">${escapeHtml(c.description||'(sem descrição)')}</td>
+          <td class="mono">${fmtDate(c.date)}</td>
+          <td class="mono" style="font-weight:600;">${fmtCurrency(c.amount)}</td>
+          <td style="text-align:right;"><button type="button" class="danger-ghost" onclick="removeClassCost('${c.id}')">Remover</button></td>
+        </tr>`).join('') : `<tr class="empty-row"><td colspan="4" style="padding:14px;">Nenhum custo lançado para esta turma.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+    <div class="cost-add">
+      <div><label>Descrição</label><input id="f-cost-desc" placeholder="ex: aluguel do espaço, coffee break, material"></div>
+      <div><label>Valor</label><input type="text" inputmode="decimal" id="f-cost-amount" placeholder="0,00" onblur="onMoneyBlur(this)"></div>
+      <div><label>Data</label><input type="date" id="f-cost-date" value="${today}"></div>
+      <div><button type="button" class="primary" onclick="addClassCost('${classId}')">Lançar</button></div>
+    </div>
+    <div class="section-head" style="margin-top:16px;margin-bottom:0;"><h3 style="font-size:15px;">Resultado da turma</h3></div>
+    <div class="result-box">
+      <div class="box"><div class="label">Receita</div><div class="val gold">${fmtCurrency(res.receita)}</div></div>
+      <div class="box"><div class="label">Comissões</div><div class="val">${fmtCurrency(res.comissoes)}</div></div>
+      <div class="box"><div class="label">Custos</div><div class="val ${res.custos>0?'danger':''}">${fmtCurrency(res.custos)}</div></div>
+      <div class="box"><div class="label">Lucro</div><div class="val ${res.lucro>=0?'ok':'danger'}">${fmtCurrency(res.lucro)}</div></div>
+    </div>
+    <p class="sale-hint" style="margin:0 0 6px;">Lucro = receita das vendas da turma − comissões dos closers (calculadas pelo % do curso) − custos lançados aqui.${res.receita>0?` Margem de ${res.margem.toFixed(1)}%. Recebido até agora: ${fmtCurrency(res.recebido)}.`:''} Custos são gravados na hora.</p>
+  `;
+}
+function refreshClassCosts(classId){
+  const el = document.getElementById('class-costs');
+  if(el) el.innerHTML = classCostsSectionHtml(classId);
+}
+async function addClassCost(classId){
+  const amount = moneyValue('f-cost-amount');
+  const description = document.getElementById('f-cost-desc').value.trim();
+  if(amount<=0){ alert('Informe o valor do custo.'); return; }
+  if(!description){ alert('Descreva o custo (ex: aluguel do espaço).'); return; }
+  const c = { id: uid(), classId, description, amount, date: document.getElementById('f-cost-date').value||null };
+  const {error} = await sb.from('class_costs').insert({id:c.id, class_id:c.classId, description:c.description, amount:c.amount, date:c.date});
+  if(error){ alert('Erro ao lançar custo: '+error.message); return; }
+  state.classCosts.push(c);
+  refreshClassCosts(classId);
+  render();
+}
+async function removeClassCost(costId){
+  const c = state.classCosts.find(x=>x.id===costId); if(!c) return;
+  if(!confirm(`Remover o custo "${c.description}" de ${fmtCurrency(c.amount)}?`)) return;
+  const {error} = await sb.from('class_costs').delete().eq('id', costId);
+  if(error){ alert('Erro ao remover custo: '+error.message); return; }
+  state.classCosts = state.classCosts.filter(x=>x.id!==costId);
+  refreshClassCosts(c.classId);
+  render();
 }
 
 function classMembersSectionHtml(classId){
@@ -2468,7 +2564,7 @@ async function importBackupFile(input){
   if(!parsed.users.find(u=>u.id===meBackup.id)) parsed.users.push(meBackup);
 
   try{
-    for(const table of ['commission_payments','class_enrollments','sale_payments','student_course_history','lead_courses','meetings','sales','course_classes','students','leads','users','closers','courses','payment_methods']){
+    for(const table of ['class_costs','commission_payments','class_enrollments','sale_payments','student_course_history','lead_courses','meetings','sales','course_classes','students','leads','users','closers','courses','payment_methods']){
       const {error} = await sb.from(table).delete().neq('id', '__none__');
       if(error) throw error;
     }
@@ -2555,6 +2651,10 @@ async function importBackupFile(input){
     }
     if((parsed.commissionPayments||[]).length){
       const {error} = await sb.from('commission_payments').insert(parsed.commissionPayments.map(p=>({id:p.id, closer_id:p.closerId, amount:p.amount||0, date:p.date||null, notes:p.notes||null})));
+      if(error) throw error;
+    }
+    if((parsed.classCosts||[]).length){
+      const {error} = await sb.from('class_costs').insert(parsed.classCosts.map(c=>({id:c.id, class_id:c.classId, description:c.description||null, amount:c.amount||0, date:c.date||null})));
       if(error) throw error;
     }
     if((parsed.classEnrollments||[]).length){
@@ -2731,6 +2831,7 @@ async function deleteItem(collection, id){
   if(collection==='classes'){
     state.sales.forEach(s=>{ if(s.classId===id) s.classId=''; });
     state.classEnrollments = state.classEnrollments.filter(e=>e.classId!==id);
+    state.classCosts = state.classCosts.filter(c=>c.classId!==id);
   }
   if(collection==='students'){
     state.classEnrollments = state.classEnrollments.filter(e=>e.studentId!==id);
@@ -2738,6 +2839,7 @@ async function deleteItem(collection, id){
   if(collection==='courses'){
     const gone = new Set(state.classes.filter(c=>c.courseId===id).map(c=>c.id));
     state.classEnrollments = state.classEnrollments.filter(e=>!gone.has(e.classId));
+    state.classCosts = state.classCosts.filter(c=>!gone.has(c.classId));
     state.classes = state.classes.filter(c=>c.courseId!==id);
     state.sales.forEach(s=>{ if(s.courseId===id) s.classId=''; });
   }
