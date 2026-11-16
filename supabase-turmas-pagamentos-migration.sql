@@ -129,3 +129,29 @@ create index if not exists class_costs_class_id_idx on class_costs(class_id);
 alter table class_costs enable row level security;
 drop policy if exists authenticated_all on class_costs;
 create policy authenticated_all on class_costs for all to authenticated using (true) with check (true);
+
+-- ========== 12) CUSTOS E IMPOSTOS POR VENDA ==========
+-- Taxas de forma de pagamento, impostos e custos operacionais lançados na própria venda.
+-- mode: 'valor' (valor fixo) | 'pct_venda' (% do valor negociado) | 'pct_forma' (% do que for pago numa forma).
+create table if not exists sale_costs (
+  id text primary key,
+  sale_id text references sales(id) on delete cascade,
+  kind text not null default 'operacional',
+  description text,
+  mode text not null default 'valor',
+  percent numeric,
+  payment_method text references payment_methods(id) on delete set null,
+  amount numeric not null default 0,
+  created_at timestamptz default now()
+);
+create index if not exists sale_costs_sale_id_idx on sale_costs(sale_id);
+alter table sale_costs enable row level security;
+drop policy if exists authenticated_all on sale_costs;
+create policy authenticated_all on sale_costs for all to authenticated using (true) with check (true);
+
+-- ========== 13) PREVISÃO DE PAGAMENTO ==========
+-- Um lançamento passa a ser 'recebido' (dinheiro que entrou) ou 'previsto' (combinado com a aluna).
+-- Só os recebidos contam como pago; os previstos viram lembrete de cobrança.
+alter table sale_payments add column if not exists status text not null default 'recebido';
+-- Lançamentos com data futura eram, na prática, parcelas combinadas: passam a ser previsões.
+update sale_payments set status = 'previsto' where status = 'recebido' and date > current_date;

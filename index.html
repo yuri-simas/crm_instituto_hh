@@ -113,7 +113,7 @@ tbody tr:last-child td{border-bottom:none;}
 .nf-check{display:inline-flex;align-items:center;gap:4px;cursor:pointer;font-size:10.5px;color:var(--ink-soft);user-select:none;}
 .nf-check input{width:13px;height:13px;margin:0;cursor:pointer;accent-color:var(--teal);}
 .nf-check.on{color:#2F6B45;font-weight:600;}
-.result-box{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0;}
+.result-box{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:8px;margin:10px 0;}
 .result-box .box{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;}
 .result-box .box .label{font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--ink-soft);}
 .result-box .box .val{font-family:'IBM Plex Mono',monospace;font-size:15px;font-weight:600;margin-top:2px;color:var(--ink);}
@@ -121,6 +121,14 @@ tbody tr:last-child td{border-bottom:none;}
 .result-box .box .val.danger{color:var(--danger);}
 .result-box .box .val.ok{color:#2F6B45;}
 .cost-add{display:grid;grid-template-columns:1.6fr 1fr 1fr auto;gap:6px;align-items:end;}
+.salecost-add{display:grid;grid-template-columns:1.5fr 1fr 1.2fr 1fr .8fr auto;gap:6px;align-items:end;}
+.salecost-add label{font-size:10.5px;color:var(--ink-soft);display:block;margin-bottom:3px;}
+.salecost-add input,.salecost-add select{width:100%;}
+@media(max-width:700px){.salecost-add{grid-template-columns:1fr 1fr;}}
+.b-previsto{background:#E7EDF7;color:#3A5A8C;}
+.b-atrasado{background:var(--danger-bg);color:var(--danger);}
+.due-row{cursor:pointer;}
+.due-row:hover td{background:var(--bg);}
 .cost-add label{font-size:10.5px;color:var(--ink-soft);display:block;margin-bottom:3px;}
 .cost-add input{width:100%;}
 .result-detail{font-size:11.5px;color:var(--ink-soft);}
@@ -505,8 +513,9 @@ function classResult(classId){
   const recebido = sales.reduce((a,s)=>a+Math.min(Number(s.value||0), salePaid(s.id)),0);
   const comissoes = sales.reduce((a,s)=>a+saleCommission(s,s.closerId)+saleCommission(s,s.closer2Id),0);
   const custos = classCosts(classId).reduce((a,c)=>a+Number(c.amount||0),0);
-  const lucro = receita - comissoes - custos;
-  return {receita, recebido, comissoes, custos, lucro, margem: receita>0 ? (lucro/receita*100) : 0, qtdCustos: classCosts(classId).length};
+  const custosVendas = sales.reduce((a,s)=>a+saleCostTotal(s.id),0);
+  const lucro = receita - comissoes - custosVendas - custos;
+  return {receita, recebido, comissoes, custos, custosVendas, lucro, margem: receita>0 ? (lucro/receita*100) : 0, qtdCustos: classCosts(classId).length};
 }
 function memberNf(m){ return m.sale ? !!m.sale.nfIssued : !!(m.enrollment && m.enrollment.nfIssued); }
 function classNfCount(classId){ const ms=classMembers(classId); return {emitidas: ms.filter(memberNf).length, total: ms.length}; }
@@ -533,14 +542,47 @@ async function toggleMemberNf(classId, key, el, fromModal){
   if(counter){ const c = classNfCount(classId); counter.textContent = `NF ${c.emitidas}/${c.total}`; counter.className = 'badge ' + (c.emitidas>=c.total ? 'b-quitado' : (c.emitidas ? 'b-parcial' : 'b-aberto')); }
 }
 function classPrice(cls){ if(!cls) return null; if(cls.price!=null && cls.price!=='') return Number(cls.price); const c=state.courses.find(c=>c.id===cls.courseId); return c?Number(c.price||0):null; }
+function hoje(){ return new Date().toISOString().slice(0,10); }
 function salePayments(saleId){ return state.salePayments.filter(p=>p.saleId===saleId).sort((a,b)=>(a.date||'').localeCompare(b.date||'')); }
-function salePaid(saleId){ return salePayments(saleId).reduce((a,p)=>a+Number(p.amount||0),0); }
+function isForecast(p){ return (p.status||'recebido')==='previsto'; }
+function salePaid(saleId){ return salePayments(saleId).filter(p=>!isForecast(p)).reduce((a,p)=>a+Number(p.amount||0),0); }
+function saleForecast(saleId){ return salePayments(saleId).filter(isForecast).reduce((a,p)=>a+Number(p.amount||0),0); }
+function saleOverdueList(saleId){ const h=hoje(); return salePayments(saleId).filter(p=>isForecast(p) && (p.date||'9999-12-31') < h); }
+function saleOverdue(saleId){ return saleOverdueList(saleId).reduce((a,p)=>a+Number(p.amount||0),0); }
 function saleOpen(sale){ return Math.max(0, Number(sale.value||0) - salePaid(sale.id)); }
 function salePayStatus(sale){
   const total = Number(sale.value||0), paid = salePaid(sale.id);
   if(total<=0 || paid>=total-0.005) return {label:'Quitado', cls:'b-quitado'};
+  if(saleOverdue(sale.id)>0.005) return {label:'Atrasado', cls:'b-atrasado'};
   if(paid>0) return {label:'Parcial', cls:'b-parcial'};
   return {label:'Em aberto', cls:'b-aberto'};
+}
+
+/* ---------- custos e impostos da venda ---------- */
+const COST_KINDS = {taxa:'Taxa de pagamento', imposto:'Imposto', operacional:'Custo operacional'};
+function saleCostsOf(saleId){ return state.saleCosts.filter(c=>c.saleId===saleId); }
+function paidByMethod(saleId, methodId){
+  return salePayments(saleId).filter(p=>p.paymentMethod===methodId).reduce((a,p)=>a+Number(p.amount||0),0);
+}
+function saleCostAmount(sale, c){
+  if(!sale) return 0;
+  if(c.mode==='pct_venda') return Number(sale.value||0) * Number(c.percent||0) / 100;
+  if(c.mode==='pct_forma') return paidByMethod(sale.id, c.paymentMethod) * Number(c.percent||0) / 100;
+  return Number(c.amount||0);
+}
+function saleCostTotal(saleId){
+  const sale = state.sales.find(x=>x.id===saleId); if(!sale) return 0;
+  return saleCostsOf(saleId).reduce((a,c)=>a+saleCostAmount(sale,c),0);
+}
+function saleCostLabel(sale, c){
+  if(c.mode==='pct_venda') return `${Number(c.percent||0)}% do valor da venda`;
+  if(c.mode==='pct_forma') return `${Number(c.percent||0)}% do pago em ${paymentName(c.paymentMethod)}`;
+  return 'valor fixo';
+}
+function saleNet(saleId){
+  const sale = state.sales.find(x=>x.id===saleId); if(!sale) return 0;
+  const com = saleCommission(sale, sale.closerId) + saleCommission(sale, sale.closer2Id);
+  return Number(sale.value||0) - com - saleCostTotal(saleId);
 }
 
 function defaultState(){
@@ -563,6 +605,7 @@ function defaultState(){
     classEnrollments: [],
     commissionPayments: [],
     classCosts: [],
+    saleCosts: [],
   };
 }
 
@@ -577,7 +620,7 @@ async function rowToHistory(h){
 
 async function loadState(){
   try{
-    const [coursesR, paymentsR, closersR, usersR, leadsR, leadCoursesR, meetingsR, salesR, studentsR, historyR, classesR, salePaymentsR, enrollmentsR, commPaymentsR, classCostsR] = await Promise.all([
+    const [coursesR, paymentsR, closersR, usersR, leadsR, leadCoursesR, meetingsR, salesR, studentsR, historyR, classesR, salePaymentsR, enrollmentsR, commPaymentsR, classCostsR, saleCostsR] = await Promise.all([
       sb.from('courses').select('*'),
       sb.from('payment_methods').select('*'),
       sb.from('closers').select('*'),
@@ -593,8 +636,9 @@ async function loadState(){
       sb.from('class_enrollments').select('*'),
       sb.from('commission_payments').select('*'),
       sb.from('class_costs').select('*'),
+      sb.from('sale_costs').select('*'),
     ]);
-    const results = [coursesR,paymentsR,closersR,usersR,leadsR,leadCoursesR,meetingsR,salesR,studentsR,historyR,classesR,salePaymentsR,enrollmentsR,commPaymentsR,classCostsR];
+    const results = [coursesR,paymentsR,closersR,usersR,leadsR,leadCoursesR,meetingsR,salesR,studentsR,historyR,classesR,salePaymentsR,enrollmentsR,commPaymentsR,classCostsR,saleCostsR];
     const firstError = results.find(r=>r.error);
     if(firstError) throw firstError.error;
 
@@ -613,10 +657,11 @@ async function loadState(){
       meetings: meetingsR.data.map(r=>({id:r.id, leadId:r.lead_id, closerId:r.closer_id||'', scheduledDate:r.scheduled_date, status:r.status, notes:r.notes})),
       sales: salesR.data.map(r=>({nfIssued:!!r.nf_issued, id:r.id, studentName:r.student_name, leadId:r.lead_id, courseId:r.course_id, classId:r.class_id||'', closerId:r.closer_id, closer2Id:r.closer2_id||'', splitPercent:r.split_percent==null?100:Number(r.split_percent), value:r.value, listPrice:r.list_price, paymentMethod:r.payment_method, date:r.date, notes:r.notes||''})),
       classes: classesR.data.map(r=>({id:r.id, courseId:r.course_id, name:r.name, startDate:r.start_date, endDate:r.end_date, capacity:r.capacity||0, price:r.price})),
-      salePayments: salePaymentsR.data.map(r=>({id:r.id, saleId:r.sale_id, amount:r.amount, date:r.date, paymentMethod:r.payment_method, notes:r.notes||''})),
+      salePayments: salePaymentsR.data.map(r=>({id:r.id, saleId:r.sale_id, amount:r.amount, date:r.date, paymentMethod:r.payment_method, notes:r.notes||'', status:r.status||'recebido'})),
       classEnrollments: enrollmentsR.data.map(r=>({id:r.id, classId:r.class_id, studentId:r.student_id, notes:r.notes||'', nfIssued:!!r.nf_issued})),
       commissionPayments: commPaymentsR.data.map(r=>({id:r.id, closerId:r.closer_id, amount:Number(r.amount||0), date:r.date, notes:r.notes||''})),
       classCosts: classCostsR.data.map(r=>({id:r.id, classId:r.class_id, description:r.description||'', amount:Number(r.amount||0), date:r.date})),
+      saleCosts: saleCostsR.data.map(r=>({id:r.id, saleId:r.sale_id, kind:r.kind||'operacional', description:r.description||'', mode:r.mode||'valor', percent:r.percent==null?null:Number(r.percent), paymentMethod:r.payment_method||'', amount:Number(r.amount||0)})),
       students: await Promise.all(studentsR.data.map(async r=>({
         id:r.id, name:r.name, phone:r.phone, phones:(Array.isArray(r.phones)&&r.phones.length)?r.phones:(r.phone?[r.phone]:[]), email:r.email, cpf:r.cpf, professionalRegistration:r.professional_registration, cep:r.cep, address:r.address,
         courseHistory: await Promise.all(historyR.data.filter(h=>h.student_id===r.id).map(rowToHistory)),
@@ -799,8 +844,28 @@ function render(){
 }
 
 /* ---------- DASHBOARD ---------- */
+function upcomingPayments(){
+  const h = hoje();
+  const mes = h.slice(0,7);
+  const vis = new Set(scopeByRole(state.sales).map(s=>s.id));
+  return state.salePayments
+    .filter(p=>isForecast(p) && vis.has(p.saleId))
+    .map(p=>{
+      const sale = state.sales.find(s=>s.id===p.saleId);
+      const venc = (p.date||'9999-12-31') < h;
+      return {p, sale, venc, doMes: (p.date||'').slice(0,7) === mes};
+    })
+    .filter(x=>x.sale && (x.venc || x.doMes))
+    .sort((a,b)=>(a.p.date||'').localeCompare(b.p.date||''));
+}
+
 let dashCourseMetric = 'value';
 function setDashCourseMetric(v){ dashCourseMetric = v; render(); }
+function monthLabel(){
+  const d = new Date();
+  const nome = d.toLocaleDateString('pt-BR', {month:'long'});
+  return `de ${nome.charAt(0).toUpperCase()+nome.slice(1)}/${String(d.getFullYear()).slice(2)}`;
+}
 
 function renderDashboard(){
   const leads = filteredLeads();
@@ -870,6 +935,40 @@ function renderDashboard(){
       <div class="metric"><div class="label">Vendas fechadas</div><div class="value mono">${sales.length}</div></div>
       <div class="metric"><div class="label">Ticket médio</div><div class="value mono">${fmtCurrency(ticket)}</div></div>
     </div>
+
+    ${(()=>{
+      const list = upcomingPayments();
+      const atrasados = list.filter(x=>x.venc);
+      const totalMes = list.filter(x=>!x.venc).reduce((a,x)=>a+Number(x.p.amount||0),0);
+      const totalAtraso = atrasados.reduce((a,x)=>a+Number(x.p.amount||0),0);
+      return `
+      <div class="card" style="margin-bottom:16px;">
+        <div class="section-head">
+          <h3>Pagamentos previstos ${monthLabel()}</h3>
+          <div style="font-size:12.5px;color:var(--ink-soft);">
+            ${list.length ? `a receber <span class="mono" style="color:var(--gold);font-weight:600;">${fmtPrice(totalMes)}</span>${totalAtraso>0?` · atrasado <span class="mono" style="color:var(--danger);font-weight:600;">${fmtPrice(totalAtraso)}</span>`:''}` : ''}
+          </div>
+        </div>
+        ${list.length ? `
+        <table>
+          <thead><tr><th>Vencimento</th><th>Aluna</th><th>Curso / Turma</th><th>Forma</th><th style="text-align:right;">Valor</th><th>Situação</th></tr></thead>
+          <tbody>
+          ${list.map(x=>{
+            const cl = classById(x.sale.classId);
+            return `<tr class="due-row" onclick="switchTab('sales');openSaleModal('${x.sale.id}')" title="Abrir a venda">
+              <td class="mono">${fmtDate(x.p.date)}</td>
+              <td style="font-weight:600;color:var(--ink);">${escapeHtml(x.sale.studentName)}</td>
+              <td>${escapeHtml(courseName(x.sale.courseId))}${cl?`<div style="font-size:11px;color:var(--ink-soft);">${escapeHtml(cl.name)}</div>`:''}</td>
+              <td>${escapeHtml(paymentName(x.p.paymentMethod))}</td>
+              <td class="mono" style="text-align:right;font-weight:600;${x.venc?'color:var(--danger);':''}">${fmtPrice(x.p.amount)}</td>
+              <td><span class="badge ${x.venc?'b-atrasado':'b-previsto'}">${x.venc?'Atrasado':'A vencer'}</span></td>
+            </tr>`;}).join('')}
+          </tbody>
+        </table>
+        <p class="sale-hint" style="margin:8px 0 0;">Clique numa linha para abrir a venda e confirmar o recebimento. Lançamentos previstos são combinados com a aluna e não contam como recebidos.</p>
+        ` : '<p style="color:var(--ink-soft);font-size:13px;">Nenhum pagamento previsto para este mês. Combinou uma data com a aluna? Registre em Vendas → Pagamentos como "Previsto".</p>'}
+      </div>`;
+    })()}
 
     <div class="grid2">
       <div class="card">
@@ -1691,38 +1790,45 @@ function salePaymentsSectionHtml(saleId, totalOverride){
   const sale = state.sales.find(s=>s.id===saleId); if(!sale) return '';
   const total = totalOverride!=null ? totalOverride : Number(sale.value||0);
   const pays = salePayments(saleId);
-  const paid = pays.reduce((a,p)=>a+Number(p.amount||0),0);
+  const paid = pays.filter(p=>!isForecast(p)).reduce((a,p)=>a+Number(p.amount||0),0);
+  const previsto = pays.filter(isForecast).reduce((a,p)=>a+Number(p.amount||0),0);
+  const atrasado = saleOverdue(saleId);
   const open = Math.max(0, total-paid);
-  const today = new Date().toISOString().slice(0,10);
+  const today = hoje();
   const quitada = total>0 && paid>=total-0.005;
   const statusHtml = total<=0
     ? `<span class="sale-hint" style="margin:0;color:var(--danger);">Informe o valor negociado para controlar o saldo.</span>`
     : quitada
       ? `<span class="badge b-quitado">✓ Quitada</span>`
-      : `<span class="badge ${paid>0?'b-parcial':'b-aberto'}">Pendente · falta ${fmtCurrency(open)}</span>`;
+      : `<span class="badge ${atrasado>0.005?'b-atrasado':(paid>0?'b-parcial':'b-aberto')}">${atrasado>0.005?`Atrasado · ${fmtCurrency(atrasado)} vencido`:`Pendente · falta ${fmtCurrency(open)}`}</span>`;
   return `
     <div class="pay-status">
       ${statusHtml}
       ${(!quitada && total>0) ? `<button type="button" class="ghost" style="border:1px solid var(--border);" onclick="markSalePaid('${saleId}')">Marcar como quitada</button>` : ''}
     </div>
-    <div class="pay-summary">
+    <div class="result-box">
       <div class="box"><div class="label">Negociado</div><div class="val gold">${fmtCurrency(total)}</div></div>
-      <div class="box"><div class="label">Pago</div><div class="val ${paid>=total-0.005&&total>0?'ok':''}">${fmtCurrency(paid)}</div></div>
+      <div class="box"><div class="label">Recebido</div><div class="val ${paid>=total-0.005&&total>0?'ok':''}">${fmtCurrency(paid)}</div></div>
+      <div class="box"><div class="label">Previsto</div><div class="val">${fmtCurrency(previsto)}</div></div>
       <div class="box"><div class="label">Em aberto</div><div class="val ${open>0?'danger':'ok'}">${fmtCurrency(open)}</div></div>
     </div>
     ${paid>total+0.005 ? `<p class="sale-hint" style="margin:0 0 8px;color:var(--danger);">Atenção: o total pago está ${fmtCurrency(paid-total)} acima do valor negociado.</p>` : ''}
     <div class="pay-list">
       <table>
-        <thead><tr><th>Data</th><th>Valor</th><th>Forma</th><th>Obs.</th><th></th></tr></thead>
+        <thead><tr><th>Data</th><th>Valor</th><th>Forma</th><th>Situação</th><th>Obs.</th><th></th></tr></thead>
         <tbody>
-        ${pays.length ? pays.map(p=>`
+        ${pays.length ? pays.map(p=>{
+          const prev = isForecast(p);
+          const venc = prev && (p.date||'9999-12-31') < today;
+          return `
           <tr>
             <td class="mono">${fmtDate(p.date)}</td>
             <td class="mono" style="font-weight:600;color:var(--ink);">${fmtCurrency(p.amount)}</td>
             <td>${escapeHtml(paymentName(p.paymentMethod))}</td>
+            <td>${prev ? `<span class="badge ${venc?'b-atrasado':'b-previsto'}">${venc?'Atrasado':'Previsto'}</span>` : '<span class="badge b-quitado">Recebido</span>'}</td>
             <td style="font-size:12px;color:var(--ink-soft);">${escapeHtml(p.notes||'')}</td>
-            <td style="text-align:right;"><button type="button" class="danger-ghost" onclick="removeSalePayment('${p.id}')">Remover</button></td>
-          </tr>`).join('') : `<tr class="empty-row"><td colspan="5" style="padding:14px;">Nenhum pagamento registrado.</td></tr>`}
+            <td style="text-align:right;white-space:nowrap;">${prev?`<button type="button" class="ghost" onclick="receiveSalePayment('${p.id}')">Receber</button>`:''}<button type="button" class="danger-ghost" onclick="removeSalePayment('${p.id}')">Remover</button></td>
+          </tr>`;}).join('') : `<tr class="empty-row"><td colspan="6" style="padding:14px;">Nenhum pagamento registrado.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -1731,10 +1837,94 @@ function salePaymentsSectionHtml(saleId, totalOverride){
       <div><label>Data</label><input type="date" id="f-pay-date" value="${today}"></div>
       <div><label>Forma</label><select id="f-pay-method">${state.paymentMethods.map(p=>`<option value="${p.id}" ${sale.paymentMethod===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select></div>
       <div><label>Obs.</label><input id="f-pay-notes" placeholder="ex: 2ª parcela"></div>
-      <div><button type="button" class="primary" onclick="addSalePayment('${saleId}')">Registrar</button></div>
+      <div><label>Tipo</label><select id="f-pay-status"><option value="recebido">Recebido</option><option value="previsto">Previsto (combinado)</option></select></div>
+      <div><button type="button" class="primary" onclick="addSalePayment('${saleId}')">Lançar</button></div>
     </div>
-    <p class="sale-hint" style="margin:6px 0 0;">Ao registrar um pagamento, a venda inteira é salva automaticamente.</p>
+    <p class="sale-hint" style="margin:6px 0 0;">Use <strong>Recebido</strong> para dinheiro que já entrou e <strong>Previsto</strong> para o que ficou combinado — o previsto não entra no "Recebido" e vira lembrete de cobrança no mês do vencimento. Ao lançar, a venda inteira é salva automaticamente.</p>
+    <div id="sale-costs">${saleCostsSectionHtml(saleId)}</div>
   `;
+}
+
+/* ---------- custos e impostos da venda ---------- */
+function saleCostsSectionHtml(saleId){
+  const sale = state.sales.find(x=>x.id===saleId); if(!sale) return '';
+  const costs = saleCostsOf(saleId);
+  const total = saleCostTotal(saleId);
+  const com = saleCommission(sale, sale.closerId) + saleCommission(sale, sale.closer2Id);
+  const liquido = Number(sale.value||0) - com - total;
+  const methods = state.paymentMethods.map(m=>`<option value="${m.id}" ${sale.paymentMethod===m.id?'selected':''}>${escapeHtml(m.name)}</option>`).join('');
+  return `
+    <div class="section-head" style="margin-top:14px;margin-bottom:8px;"><h3 style="font-size:15px;">Custos e impostos da venda</h3>${costs.length?`<span class="mono" style="font-size:13px;color:var(--danger);font-weight:600;">${fmtCurrency(total)}</span>`:''}</div>
+    <div class="pay-list">
+      <table>
+        <thead><tr><th>Descrição</th><th>Tipo</th><th>Cálculo</th><th>Valor</th><th></th></tr></thead>
+        <tbody>
+        ${costs.length ? costs.map(c=>`<tr>
+          <td style="font-weight:600;color:var(--ink);">${escapeHtml(c.description||'(sem descrição)')}</td>
+          <td><span class="badge ${c.kind==='imposto'?'b-parcial':(c.kind==='taxa'?'b-previsto':'b-novo')}">${COST_KINDS[c.kind]||c.kind}</span></td>
+          <td style="font-size:12px;color:var(--ink-soft);">${escapeHtml(saleCostLabel(sale,c))}</td>
+          <td class="mono" style="font-weight:600;">${fmtCurrency(saleCostAmount(sale,c))}</td>
+          <td style="text-align:right;"><button type="button" class="danger-ghost" onclick="removeSaleCost('${c.id}')">Remover</button></td>
+        </tr>`).join('') : `<tr class="empty-row"><td colspan="5" style="padding:14px;">Nenhum custo lançado nesta venda.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+    <div class="salecost-add">
+      <div><label>Descrição</label><input id="f-sc-desc" placeholder="ex: taxa da maquininha, ISS"></div>
+      <div><label>Tipo</label><select id="f-sc-kind"><option value="taxa">Taxa de pagamento</option><option value="imposto">Imposto</option><option value="operacional">Custo operacional</option></select></div>
+      <div><label>Cálculo</label><select id="f-sc-mode" onchange="onSaleCostModeChange()">
+        <option value="valor">Valor fixo (R$)</option>
+        <option value="pct_venda">% do valor da venda</option>
+        <option value="pct_forma">% do pago numa forma</option>
+      </select></div>
+      <div><label>Forma de pagamento</label><select id="f-sc-method" disabled>${methods}</select></div>
+      <div><label id="f-sc-vlabel">Valor (R$)</label><input type="text" inputmode="decimal" id="f-sc-value" placeholder="0,00" onblur="onMoneyBlur(this)"></div>
+      <div><button type="button" class="primary" onclick="addSaleCost('${saleId}')">Lançar</button></div>
+    </div>
+    <div class="result-box">
+      <div class="box"><div class="label">Valor da venda</div><div class="val gold">${fmtCurrency(sale.value)}</div></div>
+      <div class="box"><div class="label">Comissões</div><div class="val">${fmtCurrency(com)}</div></div>
+      <div class="box"><div class="label">Taxas e impostos</div><div class="val ${total>0?'danger':''}">${fmtCurrency(total)}</div></div>
+      <div class="box"><div class="label">Líquido</div><div class="val ${liquido>=0?'ok':'danger'}">${fmtCurrency(liquido)}</div></div>
+    </div>
+    <p class="sale-hint" style="margin:0 0 6px;">Estes custos seguem a aluna e entram automaticamente no resultado da turma em que ela está matriculada. Para venda com mais de uma forma de pagamento, lance uma taxa por forma usando "% do pago numa forma".</p>
+  `;
+}
+function onSaleCostModeChange(){
+  const mode = document.getElementById('f-sc-mode').value;
+  document.getElementById('f-sc-method').disabled = (mode !== 'pct_forma');
+  document.getElementById('f-sc-vlabel').textContent = mode === 'valor' ? 'Valor (R$)' : 'Percentual (%)';
+}
+function refreshSaleCosts(saleId){
+  const el = document.getElementById('sale-costs');
+  if(el) el.innerHTML = saleCostsSectionHtml(saleId);
+}
+async function addSaleCost(saleId){
+  const description = document.getElementById('f-sc-desc').value.trim();
+  const kind = document.getElementById('f-sc-kind').value;
+  const mode = document.getElementById('f-sc-mode').value;
+  const raw = moneyValue('f-sc-value');
+  if(!description){ alert('Descreva o custo (ex: taxa da maquininha).'); return; }
+  if(raw<=0){ alert(mode==='valor' ? 'Informe o valor do custo.' : 'Informe o percentual.'); return; }
+  const c = { id: uid(), saleId, kind, description, mode,
+    percent: mode==='valor' ? null : raw,
+    paymentMethod: mode==='pct_forma' ? document.getElementById('f-sc-method').value : '',
+    amount: mode==='valor' ? raw : 0 };
+  if(!(await persistSale())) return;
+  const {error} = await sb.from('sale_costs').insert({id:c.id, sale_id:c.saleId, kind:c.kind, description:c.description, mode:c.mode, percent:c.percent, payment_method:c.paymentMethod||null, amount:c.amount});
+  if(error){ alert('Erro ao lançar custo: '+error.message); return; }
+  state.saleCosts.push(c);
+  refreshSaleCosts(saleId);
+  render();
+}
+async function removeSaleCost(costId){
+  const c = state.saleCosts.find(x=>x.id===costId); if(!c) return;
+  if(!confirm(`Remover o custo "${c.description}"?`)) return;
+  const {error} = await sb.from('sale_costs').delete().eq('id', costId);
+  if(error){ alert('Erro ao remover: '+error.message); return; }
+  state.saleCosts = state.saleCosts.filter(x=>x.id!==costId);
+  refreshSaleCosts(c.saleId);
+  render();
 }
 function refreshSalePayments(saleId){
   const el = document.getElementById('sale-payments');
@@ -1744,10 +1934,12 @@ function refreshSalePayments(saleId){
 async function addSalePayment(saleId){
   const amount = moneyValue('f-pay-amount');
   if(amount<=0){ alert('Informe o valor pago.'); return; }
+  const statusEl = document.getElementById('f-pay-status');
+  const status = statusEl ? statusEl.value : 'recebido';
   const p = { id: uid(), saleId, amount, date: document.getElementById('f-pay-date').value||null,
-    paymentMethod: document.getElementById('f-pay-method').value||null, notes: document.getElementById('f-pay-notes').value.trim() };
+    paymentMethod: document.getElementById('f-pay-method').value||null, notes: document.getElementById('f-pay-notes').value.trim(), status };
   if(!(await persistSale())) return;
-  const {error} = await sb.from('sale_payments').insert({id:p.id, sale_id:p.saleId, amount:p.amount, date:p.date, payment_method:p.paymentMethod, notes:p.notes||null});
+  const {error} = await sb.from('sale_payments').insert({id:p.id, sale_id:p.saleId, amount:p.amount, date:p.date, payment_method:p.paymentMethod, notes:p.notes||null, status:p.status});
   if(error){ alert('Erro ao registrar pagamento: '+error.message); return; }
   state.salePayments.push(p);
   refreshSalePayments(saleId);
@@ -1760,17 +1952,27 @@ async function markSalePaid(saleId){
   if(open<=0) return;
   if(!confirm(`Registrar pagamento de ${fmtCurrency(open)} com a data de hoje e marcar a venda como quitada?`)) return;
   const method = document.getElementById('f-pay-method')?.value || sale.paymentMethod || state.paymentMethods[0]?.id || null;
-  const p = { id: uid(), saleId, amount: open, date: new Date().toISOString().slice(0,10), paymentMethod: method, notes: 'Quitação' };
+  const p = { id: uid(), saleId, amount: open, date: hoje(), paymentMethod: method, notes: 'Quitação', status:'recebido' };
   if(!(await persistSale())) return;
-  const {error} = await sb.from('sale_payments').insert({id:p.id, sale_id:p.saleId, amount:p.amount, date:p.date, payment_method:p.paymentMethod, notes:p.notes});
+  const {error} = await sb.from('sale_payments').insert({id:p.id, sale_id:p.saleId, amount:p.amount, date:p.date, payment_method:p.paymentMethod, notes:p.notes, status:'recebido'});
   if(error){ alert('Erro ao registrar quitação: '+error.message); return; }
   state.salePayments.push(p);
   refreshSalePayments(saleId);
   render();
 }
+async function receiveSalePayment(paymentId){
+  const p = state.salePayments.find(x=>x.id===paymentId); if(!p) return;
+  if(!confirm(`Confirmar o recebimento de ${fmtCurrency(p.amount)} (previsto para ${fmtDate(p.date)}) com a data de hoje?`)) return;
+  const date = hoje();
+  const {error} = await sb.from('sale_payments').update({status:'recebido', date}).eq('id', paymentId);
+  if(error){ alert('Erro ao confirmar recebimento: '+error.message); return; }
+  p.status = 'recebido'; p.date = date;
+  refreshSalePayments(p.saleId);
+  render();
+}
 async function removeSalePayment(paymentId){
   const p = state.salePayments.find(x=>x.id===paymentId); if(!p) return;
-  if(!confirm(`Remover o pagamento de ${fmtCurrency(p.amount)} de ${fmtDate(p.date)}?`)) return;
+  if(!confirm(`Remover o ${isForecast(p)?'pagamento previsto':'pagamento'} de ${fmtCurrency(p.amount)} de ${fmtDate(p.date)}?`)) return;
   const {error} = await sb.from('sale_payments').delete().eq('id', paymentId);
   if(error){ alert('Erro ao remover pagamento: '+error.message); return; }
   state.salePayments = state.salePayments.filter(x=>x.id!==paymentId);
@@ -2139,7 +2341,8 @@ function renderClasses(){
             ${isAdmin ? `<td>${qty||res.custos ? `<details class="class-students"><summary><span class="mono" style="color:${res.lucro>=0?'#2F6B45':'var(--danger)'};font-weight:600;">${fmtPrice(res.lucro)}</span></summary><div class="result-detail" style="margin-top:4px;">
                 Receita <b>${fmtPrice(res.receita)}</b><br>
                 − Comissões <b>${fmtPrice(res.comissoes)}</b><br>
-                − Custos (${res.qtdCustos}) <b>${fmtPrice(res.custos)}</b><br>
+                − Taxas e impostos das vendas <b>${fmtPrice(res.custosVendas)}</b><br>
+                − Custos da turma (${res.qtdCustos}) <b>${fmtPrice(res.custos)}</b><br>
                 = Lucro <b style="color:${res.lucro>=0?'#2F6B45':'var(--danger)'};">${fmtPrice(res.lucro)}</b>${res.receita>0?` · margem ${res.margem.toFixed(1)}%`:''}<br>
                 <span style="color:var(--ink-soft);">recebido até agora: ${fmtPrice(res.recebido)}</span>
               </div></details>` : '<span style="color:var(--ink-soft);">—</span>'}</td>
@@ -2209,10 +2412,11 @@ function classCostsSectionHtml(classId){
     <div class="result-box">
       <div class="box"><div class="label">Receita</div><div class="val gold">${fmtCurrency(res.receita)}</div></div>
       <div class="box"><div class="label">Comissões</div><div class="val">${fmtCurrency(res.comissoes)}</div></div>
-      <div class="box"><div class="label">Custos</div><div class="val ${res.custos>0?'danger':''}">${fmtCurrency(res.custos)}</div></div>
+      <div class="box"><div class="label">Taxas e impostos</div><div class="val ${res.custosVendas>0?'danger':''}">${fmtCurrency(res.custosVendas)}</div></div>
+      <div class="box"><div class="label">Custos da turma</div><div class="val ${res.custos>0?'danger':''}">${fmtCurrency(res.custos)}</div></div>
       <div class="box"><div class="label">Lucro</div><div class="val ${res.lucro>=0?'ok':'danger'}">${fmtCurrency(res.lucro)}</div></div>
     </div>
-    <p class="sale-hint" style="margin:0 0 6px;">Lucro = receita das vendas da turma − comissões dos closers (calculadas pelo % do curso) − custos lançados aqui.${res.receita>0?` Margem de ${res.margem.toFixed(1)}%. Recebido até agora: ${fmtCurrency(res.recebido)}.`:''} Custos são gravados na hora.</p>
+    <p class="sale-hint" style="margin:0 0 6px;">Lucro = receita das vendas da turma − comissões dos closers − taxas e impostos lançados nas vendas das alunas − custos lançados aqui.${res.receita>0?` Margem de ${res.margem.toFixed(1)}%. Recebido até agora: ${fmtCurrency(res.recebido)}.`:''} Custos são gravados na hora.</p>
   `;
 }
 function refreshClassCosts(classId){
@@ -2564,7 +2768,7 @@ async function importBackupFile(input){
   if(!parsed.users.find(u=>u.id===meBackup.id)) parsed.users.push(meBackup);
 
   try{
-    for(const table of ['class_costs','commission_payments','class_enrollments','sale_payments','student_course_history','lead_courses','meetings','sales','course_classes','students','leads','users','closers','courses','payment_methods']){
+    for(const table of ['sale_costs','class_costs','commission_payments','class_enrollments','sale_payments','student_course_history','lead_courses','meetings','sales','course_classes','students','leads','users','closers','courses','payment_methods']){
       const {error} = await sb.from(table).delete().neq('id', '__none__');
       if(error) throw error;
     }
@@ -2629,8 +2833,15 @@ async function importBackupFile(input){
     }
     if((parsed.salePayments||[]).length){
       const {error} = await sb.from('sale_payments').insert(parsed.salePayments.map(p=>({
-        id:p.id, sale_id:p.saleId, amount:p.amount||0, date:p.date||null, payment_method:p.paymentMethod||null, notes:p.notes||null,
+        id:p.id, sale_id:p.saleId, amount:p.amount||0, date:p.date||null, payment_method:p.paymentMethod||null, notes:p.notes||null, status:p.status||'recebido',
       })));
+    }
+    if((parsed.saleCosts||[]).length){
+      const {error} = await sb.from('sale_costs').insert(parsed.saleCosts.map(c=>({
+        id:c.id, sale_id:c.saleId, kind:c.kind||'operacional', description:c.description||null, mode:c.mode||'valor',
+        percent:c.percent==null?null:c.percent, payment_method:c.paymentMethod||null, amount:c.amount||0,
+      })));
+      if(error) throw error;
       if(error) throw error;
     }
     if((parsed.students||[]).length){
@@ -2823,6 +3034,7 @@ async function deleteItem(collection, id){
   }
   if(collection==='sales'){
     state.salePayments = state.salePayments.filter(p=>p.saleId!==id);
+    state.saleCosts = state.saleCosts.filter(c=>c.saleId!==id);
   }
   if(collection==='closers'){
     state.sales.forEach(s=>{ if(s.closer2Id===id){ s.closer2Id=''; s.splitPercent=100; } });
