@@ -155,3 +155,7 @@ create policy authenticated_all on sale_costs for all to authenticated using (tr
 alter table sale_payments add column if not exists status text not null default 'recebido';
 -- Lançamentos com data futura eram, na prática, parcelas combinadas: passam a ser previsões.
 update sale_payments set status = 'previsto' where status = 'recebido' and date > current_date;
+
+-- ========== 14) BASE DO PERCENTUAL DO CUSTO ==========
+-- mode ganha 'pct_recebido' (% do que já entrou) e 'pct_base' (% de um valor informado).
+alter table sale_costs add column if not exists base_amount numeric;

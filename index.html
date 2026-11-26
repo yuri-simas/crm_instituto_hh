@@ -121,7 +121,11 @@ tbody tr:last-child td{border-bottom:none;}
 .result-box .box .val.danger{color:var(--danger);}
 .result-box .box .val.ok{color:#2F6B45;}
 .cost-add{display:grid;grid-template-columns:1.6fr 1fr 1fr auto;gap:6px;align-items:end;}
-.salecost-add{display:grid;grid-template-columns:1.5fr 1fr 1.2fr 1fr .8fr auto;gap:6px;align-items:end;}
+.salecost-add{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;align-items:end;}
+.salecost-add .wide{grid-column:span 2;}
+@media(max-width:700px){.salecost-add .wide{grid-column:span 1;}}
+.cost-preview{font-size:12px;color:var(--teal);background:var(--teal-bg);border-radius:8px;padding:7px 10px;margin:8px 0 0;}
+.cost-preview.empty{background:transparent;color:var(--ink-soft);padding:0;}
 .salecost-add label{font-size:10.5px;color:var(--ink-soft);display:block;margin-bottom:3px;}
 .salecost-add input,.salecost-add select{width:100%;}
 @media(max-width:700px){.salecost-add{grid-template-columns:1fr 1fr;}}
@@ -564,20 +568,32 @@ function saleCostsOf(saleId){ return state.saleCosts.filter(c=>c.saleId===saleId
 function paidByMethod(saleId, methodId){
   return salePayments(saleId).filter(p=>p.paymentMethod===methodId).reduce((a,p)=>a+Number(p.amount||0),0);
 }
+function saleCostBase(sale, mode, paymentMethod, baseAmount){
+  if(mode==='pct_venda') return Number(sale.value||0);
+  if(mode==='pct_recebido') return salePaid(sale.id);
+  if(mode==='pct_forma') return paidByMethod(sale.id, paymentMethod);
+  if(mode==='pct_base') return Number(baseAmount||0);
+  return 0;
+}
 function saleCostAmount(sale, c){
   if(!sale) return 0;
-  if(c.mode==='pct_venda') return Number(sale.value||0) * Number(c.percent||0) / 100;
-  if(c.mode==='pct_forma') return paidByMethod(sale.id, c.paymentMethod) * Number(c.percent||0) / 100;
-  return Number(c.amount||0);
+  if(c.mode==='valor') return Number(c.amount||0);
+  return saleCostBase(sale, c.mode, c.paymentMethod, c.baseAmount) * Number(c.percent||0) / 100;
 }
 function saleCostTotal(saleId){
   const sale = state.sales.find(x=>x.id===saleId); if(!sale) return 0;
   return saleCostsOf(saleId).reduce((a,c)=>a+saleCostAmount(sale,c),0);
 }
+const COST_BASE_LABEL = {
+  pct_venda:'valor da venda', pct_recebido:'valor recebido',
+  pct_forma:'pago numa forma', pct_base:'valor informado',
+};
 function saleCostLabel(sale, c){
-  if(c.mode==='pct_venda') return `${Number(c.percent||0)}% do valor da venda`;
-  if(c.mode==='pct_forma') return `${Number(c.percent||0)}% do pago em ${paymentName(c.paymentMethod)}`;
-  return 'valor fixo';
+  if(c.mode==='valor') return 'valor fixo';
+  const pct = Number(c.percent||0);
+  const base = saleCostBase(sale, c.mode, c.paymentMethod, c.baseAmount);
+  const sobre = c.mode==='pct_forma' ? `pago em ${paymentName(c.paymentMethod)}` : COST_BASE_LABEL[c.mode];
+  return `${pct}% sobre ${sobre} (${fmtCurrency(base)})`;
 }
 function saleNet(saleId){
   const sale = state.sales.find(x=>x.id===saleId); if(!sale) return 0;
@@ -661,7 +677,7 @@ async function loadState(){
       classEnrollments: enrollmentsR.data.map(r=>({id:r.id, classId:r.class_id, studentId:r.student_id, notes:r.notes||'', nfIssued:!!r.nf_issued})),
       commissionPayments: commPaymentsR.data.map(r=>({id:r.id, closerId:r.closer_id, amount:Number(r.amount||0), date:r.date, notes:r.notes||''})),
       classCosts: classCostsR.data.map(r=>({id:r.id, classId:r.class_id, description:r.description||'', amount:Number(r.amount||0), date:r.date})),
-      saleCosts: saleCostsR.data.map(r=>({id:r.id, saleId:r.sale_id, kind:r.kind||'operacional', description:r.description||'', mode:r.mode||'valor', percent:r.percent==null?null:Number(r.percent), paymentMethod:r.payment_method||'', amount:Number(r.amount||0)})),
+      saleCosts: saleCostsR.data.map(r=>({id:r.id, saleId:r.sale_id, kind:r.kind||'operacional', description:r.description||'', mode:r.mode||'valor', percent:r.percent==null?null:Number(r.percent), paymentMethod:r.payment_method||'', amount:Number(r.amount||0), baseAmount:r.base_amount==null?null:Number(r.base_amount)})),
       students: await Promise.all(studentsR.data.map(async r=>({
         id:r.id, name:r.name, phone:r.phone, phones:(Array.isArray(r.phones)&&r.phones.length)?r.phones:(r.phone?[r.phone]:[]), email:r.email, cpf:r.cpf, professionalRegistration:r.professional_registration, cep:r.cep, address:r.address,
         courseHistory: await Promise.all(historyR.data.filter(h=>h.student_id===r.id).map(rowToHistory)),
@@ -1870,34 +1886,64 @@ function saleCostsSectionHtml(saleId){
       </table>
     </div>
     <div class="salecost-add">
-      <div><label>Descrição</label><input id="f-sc-desc" placeholder="ex: taxa da maquininha, ISS"></div>
-      <div><label>Tipo</label><select id="f-sc-kind"><option value="taxa">Taxa de pagamento</option><option value="imposto">Imposto</option><option value="operacional">Custo operacional</option></select></div>
-      <div><label>Cálculo</label><select id="f-sc-mode" onchange="onSaleCostModeChange()">
+      <div class="wide"><label>Descrição</label><input id="f-sc-desc" placeholder="ex: taxa da maquininha, ISS"></div>
+      <div><label>Tipo</label><select id="f-sc-kind" onchange="onSaleCostKindChange()"><option value="taxa">Taxa de pagamento</option><option value="imposto">Imposto</option><option value="operacional">Custo operacional</option></select></div>
+      <div class="wide"><label>Cálculo</label><select id="f-sc-mode" onchange="onSaleCostModeChange()">
         <option value="valor">Valor fixo (R$)</option>
-        <option value="pct_venda">% do valor da venda</option>
-        <option value="pct_forma">% do pago numa forma</option>
+        <option value="pct_venda">% sobre o valor da venda</option>
+        <option value="pct_recebido">% sobre o valor já recebido</option>
+        <option value="pct_forma">% sobre o pago numa forma</option>
+        <option value="pct_base">% sobre um valor que eu informo</option>
       </select></div>
-      <div><label>Forma de pagamento</label><select id="f-sc-method" disabled>${methods}</select></div>
-      <div><label id="f-sc-vlabel">Valor (R$)</label><input type="text" inputmode="decimal" id="f-sc-value" placeholder="0,00" onblur="onMoneyBlur(this)"></div>
+      <div id="f-sc-method-wrap"><label>Forma de pagamento</label><select id="f-sc-method" onchange="updateSaleCostPreview()">${methods}</select></div>
+      <div id="f-sc-base-wrap"><label>Sobre o valor de (R$)</label><input type="text" inputmode="decimal" id="f-sc-base" placeholder="0,00" oninput="updateSaleCostPreview()" onblur="onMoneyBlur(this)"></div>
+      <div><label id="f-sc-vlabel">Valor (R$)</label><input type="text" inputmode="decimal" id="f-sc-value" placeholder="0,00" oninput="updateSaleCostPreview()" onblur="onMoneyBlur(this)"></div>
       <div><button type="button" class="primary" onclick="addSaleCost('${saleId}')">Lançar</button></div>
     </div>
+    <p class="cost-preview empty" id="f-sc-preview"></p>
     <div class="result-box">
       <div class="box"><div class="label">Valor da venda</div><div class="val gold">${fmtCurrency(sale.value)}</div></div>
       <div class="box"><div class="label">Comissões</div><div class="val">${fmtCurrency(com)}</div></div>
       <div class="box"><div class="label">Taxas e impostos</div><div class="val ${total>0?'danger':''}">${fmtCurrency(total)}</div></div>
       <div class="box"><div class="label">Líquido</div><div class="val ${liquido>=0?'ok':'danger'}">${fmtCurrency(liquido)}</div></div>
     </div>
-    <p class="sale-hint" style="margin:0 0 6px;">Estes custos seguem a aluna e entram automaticamente no resultado da turma em que ela está matriculada. Para venda com mais de uma forma de pagamento, lance uma taxa por forma usando "% do pago numa forma".</p>
+    <p class="sale-hint" style="margin:0 0 6px;">Estes custos seguem a aluna e entram automaticamente no resultado da turma em que ela está matriculada. Impostos e taxas podem ser percentuais sobre o valor da venda, sobre o que já foi recebido, sobre o pago em uma forma específica (venda dividida entre Pix e cartão) ou sobre um valor que você informa.</p>
   `;
+}
+function onSaleCostKindChange(){
+  // Imposto e taxa quase sempre são percentuais: já abre o cálculo por percentual.
+  const kind = document.getElementById('f-sc-kind').value;
+  const modeEl = document.getElementById('f-sc-mode');
+  if(kind!=='operacional' && modeEl.value==='valor') modeEl.value = 'pct_venda';
+  if(kind==='operacional' && modeEl.value!=='valor') modeEl.value = 'valor';
+  onSaleCostModeChange();
+  if(modeEl.value!=='valor') document.getElementById('f-sc-value').focus();
 }
 function onSaleCostModeChange(){
   const mode = document.getElementById('f-sc-mode').value;
-  document.getElementById('f-sc-method').disabled = (mode !== 'pct_forma');
-  document.getElementById('f-sc-vlabel').textContent = mode === 'valor' ? 'Valor (R$)' : 'Percentual (%)';
+  const pct = mode !== 'valor';
+  document.getElementById('f-sc-method-wrap').style.display = (mode==='pct_forma') ? 'block' : 'none';
+  document.getElementById('f-sc-base-wrap').style.display = (mode==='pct_base') ? 'block' : 'none';
+  document.getElementById('f-sc-vlabel').textContent = pct ? 'Percentual (%)' : 'Valor (R$)';
+  document.getElementById('f-sc-value').placeholder = pct ? '0,00' : '0,00';
+  updateSaleCostPreview();
+}
+function updateSaleCostPreview(){
+  const el = document.getElementById('f-sc-preview'); if(!el) return;
+  const sale = state.sales.find(x=>x.id===(editing && editing.id));
+  const mode = document.getElementById('f-sc-mode').value;
+  const val = moneyValue('f-sc-value');
+  if(mode==='valor' || !sale || val<=0){ el.textContent=''; el.className='cost-preview empty'; return; }
+  const baseAmount = moneyValue('f-sc-base');
+  const method = document.getElementById('f-sc-method').value;
+  const base = saleCostBase(sale, mode, method, baseAmount);
+  const sobre = mode==='pct_forma' ? `do pago em ${paymentName(method)}` : `do ${COST_BASE_LABEL[mode]}`;
+  el.className = 'cost-preview';
+  el.textContent = `${val}% ${sobre} (${fmtCurrency(base)}) = ${fmtCurrency(base*val/100)}`;
 }
 function refreshSaleCosts(saleId){
   const el = document.getElementById('sale-costs');
-  if(el) el.innerHTML = saleCostsSectionHtml(saleId);
+  if(el){ el.innerHTML = saleCostsSectionHtml(saleId); onSaleCostModeChange(); }
 }
 async function addSaleCost(saleId){
   const description = document.getElementById('f-sc-desc').value.trim();
@@ -1906,12 +1952,15 @@ async function addSaleCost(saleId){
   const raw = moneyValue('f-sc-value');
   if(!description){ alert('Descreva o custo (ex: taxa da maquininha).'); return; }
   if(raw<=0){ alert(mode==='valor' ? 'Informe o valor do custo.' : 'Informe o percentual.'); return; }
+  const baseAmount = mode==='pct_base' ? moneyValue('f-sc-base') : null;
+  if(mode==='pct_base' && !(baseAmount>0)){ alert('Informe o valor sobre o qual o percentual incide.'); return; }
   const c = { id: uid(), saleId, kind, description, mode,
     percent: mode==='valor' ? null : raw,
     paymentMethod: mode==='pct_forma' ? document.getElementById('f-sc-method').value : '',
-    amount: mode==='valor' ? raw : 0 };
+    amount: mode==='valor' ? raw : 0,
+    baseAmount };
   if(!(await persistSale())) return;
-  const {error} = await sb.from('sale_costs').insert({id:c.id, sale_id:c.saleId, kind:c.kind, description:c.description, mode:c.mode, percent:c.percent, payment_method:c.paymentMethod||null, amount:c.amount});
+  const {error} = await sb.from('sale_costs').insert({id:c.id, sale_id:c.saleId, kind:c.kind, description:c.description, mode:c.mode, percent:c.percent, payment_method:c.paymentMethod||null, amount:c.amount, base_amount:c.baseAmount});
   if(error){ alert('Erro ao lançar custo: '+error.message); return; }
   state.saleCosts.push(c);
   refreshSaleCosts(saleId);
@@ -2839,7 +2888,7 @@ async function importBackupFile(input){
     if((parsed.saleCosts||[]).length){
       const {error} = await sb.from('sale_costs').insert(parsed.saleCosts.map(c=>({
         id:c.id, sale_id:c.saleId, kind:c.kind||'operacional', description:c.description||null, mode:c.mode||'valor',
-        percent:c.percent==null?null:c.percent, payment_method:c.paymentMethod||null, amount:c.amount||0,
+        percent:c.percent==null?null:c.percent, payment_method:c.paymentMethod||null, amount:c.amount||0, base_amount:c.baseAmount==null?null:c.baseAmount,
       })));
       if(error) throw error;
       if(error) throw error;
