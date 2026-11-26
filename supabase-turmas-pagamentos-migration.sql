@@ -159,3 +159,32 @@ update sale_payments set status = 'previsto' where status = 'recebido' and date 
 -- ========== 14) BASE DO PERCENTUAL DO CUSTO ==========
 -- mode ganha 'pct_recebido' (% do que já entrou) e 'pct_base' (% de um valor informado).
 alter table sale_costs add column if not exists base_amount numeric;
+
+-- ========== 15) FLUXO DE CAIXA ==========
+-- Prazo de compensação por forma de pagamento: Pix cai no mesmo dia, cartão em D+30 por parcela.
+alter table payment_methods add column if not exists settlement_days integer default 0;
+update payment_methods set settlement_days = 30 where name ilike '%cart%' and coalesce(settlement_days,0) = 0;
+
+-- Parcelamento negociado no lançamento (1 = à vista).
+alter table sale_payments add column if not exists installments integer default 1;
+
+-- A taxa pode ser vinculada ao lançamento a que se refere, para a parcela entrar líquida no fluxo.
+alter table sale_costs add column if not exists payment_id text references sale_payments(id) on delete set null;
+
+-- Lançamentos manuais do fluxo: despesas que não são de turma (luz, guia de imposto) e outras entradas.
+create table if not exists cash_entries (
+  id text primary key,
+  kind text not null default 'despesa',
+  description text,
+  category text,
+  amount numeric not null default 0,
+  due_date date,
+  paid_date date,
+  recurring boolean default false,
+  notes text,
+  created_at timestamptz default now()
+);
+create index if not exists cash_entries_due_idx on cash_entries(due_date);
+alter table cash_entries enable row level security;
+drop policy if exists authenticated_all on cash_entries;
+create policy authenticated_all on cash_entries for all to authenticated using (true) with check (true);

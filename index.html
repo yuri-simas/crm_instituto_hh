@@ -131,6 +131,10 @@ tbody tr:last-child td{border-bottom:none;}
 @media(max-width:700px){.salecost-add{grid-template-columns:1fr 1fr;}}
 .b-previsto{background:#E7EDF7;color:#3A5A8C;}
 .b-atrasado{background:var(--danger-bg);color:var(--danger);}
+.month-nav{display:flex;align-items:center;gap:10px;}
+.month-nav strong{font-family:'Fraunces',serif;font-size:17px;min-width:130px;text-align:center;}
+.month-nav button{padding:5px 11px;}
+.metric-sub{font-size:11px;color:var(--ink-soft);margin-top:3px;}
 .due-row{cursor:pointer;}
 .due-row:hover td{background:var(--bg);}
 .cost-add label{font-size:10.5px;color:var(--ink-soft);display:block;margin-bottom:3px;}
@@ -353,6 +357,7 @@ const TABS = [
   {key:'sales', label:'Vendas', roles:['admin','closer']},
   {key:'contracts', label:'Contratos', roles:['admin','closer']},
   {key:'commissions', label:'Comissionamento', roles:['admin']},
+  {key:'cash', label:'Fluxo de Caixa', roles:['admin']},
   {key:'courses', label:'Cursos', roles:['admin']},
   {key:'classes', label:'Turmas', roles:['admin','closer']},
   {key:'payments', label:'Formas de Pagamento', roles:['admin']},
@@ -564,6 +569,26 @@ function salePayStatus(sale){
 }
 
 /* ---------- custos e impostos da venda ---------- */
+function methodSettlementDays(id){ const m=state.paymentMethods.find(x=>x.id===id); return m?Number(m.settlementDays||0):0; }
+function addDays(dateStr, days){
+  if(!dateStr) return null;
+  const d = new Date(dateStr+'T12:00:00');
+  d.setDate(d.getDate()+days);
+  return d.toISOString().slice(0,10);
+}
+function ym(dateStr){ return (dateStr||'').slice(0,7); }
+function ymLabel(m){
+  if(!m) return '';
+  const [a,b] = m.split('-');
+  const nome = new Date(Number(a), Number(b)-1, 1).toLocaleDateString('pt-BR',{month:'long'});
+  return `${nome.charAt(0).toUpperCase()+nome.slice(1)}/${a.slice(2)}`;
+}
+function ymShift(m, delta){
+  const [a,b] = m.split('-').map(Number);
+  const d = new Date(a, b-1+delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+}
+
 const COST_KINDS = {taxa:'Taxa de pagamento', imposto:'Imposto', operacional:'Custo operacional'};
 function saleCostsOf(saleId){ return state.saleCosts.filter(c=>c.saleId===saleId); }
 function paidByMethod(saleId, methodId){
@@ -597,6 +622,29 @@ function saleCostLabel(sale, c){
   return `${pct}% sobre ${sobre} (${fmtCurrency(base)})`;
 }
 // Líquido = o que já entrou menos comissões e custos da venda.
+// Taxas vinculadas a um lançamento específico (ex.: taxa da maquininha daquela transação).
+function paymentFee(p){
+  const sale = state.sales.find(x=>x.id===p.saleId); if(!sale) return 0;
+  return state.saleCosts.filter(c=>c.paymentId===p.id).reduce((a,c)=>a+saleCostAmount(sale,c),0);
+}
+// Quando o dinheiro de um lançamento cai na conta: à vista na data + prazo da forma;
+// parcelado, uma parcela a cada "prazo" (cartão em 10x = 30, 60, 90... dias).
+function paymentSchedule(p){
+  const n = Math.max(1, Number(p.installments||1));
+  const dias = methodSettlementDays(p.paymentMethod);
+  const liquido = Number(p.amount||0) - paymentFee(p);
+  const valorParcela = liquido / n;
+  const out = [];
+  for(let i=1;i<=n;i++){
+    const data = dias>0 ? addDays(p.date, dias*i) : p.date;
+    out.push({ paymentId:p.id, saleId:p.saleId, parcela:i, total:n, date:data, amount:valorParcela,
+      bruto:Number(p.amount||0)/n, taxa:paymentFee(p)/n,
+      // o dinheiro só está na conta se a aluna já pagou e a data de compensação passou
+      realizado: !isForecast(p) && (data||'9999-12-31') <= hoje() });
+  }
+  return out;
+}
+
 function saleNet(saleId){
   const sale = state.sales.find(x=>x.id===saleId); if(!sale) return 0;
   const com = saleCommission(sale, sale.closerId) + saleCommission(sale, sale.closer2Id);
@@ -624,6 +672,7 @@ function defaultState(){
     commissionPayments: [],
     classCosts: [],
     saleCosts: [],
+    cashEntries: [],
   };
 }
 
@@ -638,7 +687,7 @@ async function rowToHistory(h){
 
 async function loadState(){
   try{
-    const [coursesR, paymentsR, closersR, usersR, leadsR, leadCoursesR, meetingsR, salesR, studentsR, historyR, classesR, salePaymentsR, enrollmentsR, commPaymentsR, classCostsR, saleCostsR] = await Promise.all([
+    const [coursesR, paymentsR, closersR, usersR, leadsR, leadCoursesR, meetingsR, salesR, studentsR, historyR, classesR, salePaymentsR, enrollmentsR, commPaymentsR, classCostsR, saleCostsR, cashR] = await Promise.all([
       sb.from('courses').select('*'),
       sb.from('payment_methods').select('*'),
       sb.from('closers').select('*'),
@@ -655,8 +704,9 @@ async function loadState(){
       sb.from('commission_payments').select('*'),
       sb.from('class_costs').select('*'),
       sb.from('sale_costs').select('*'),
+      sb.from('cash_entries').select('*'),
     ]);
-    const results = [coursesR,paymentsR,closersR,usersR,leadsR,leadCoursesR,meetingsR,salesR,studentsR,historyR,classesR,salePaymentsR,enrollmentsR,commPaymentsR,classCostsR,saleCostsR];
+    const results = [coursesR,paymentsR,closersR,usersR,leadsR,leadCoursesR,meetingsR,salesR,studentsR,historyR,classesR,salePaymentsR,enrollmentsR,commPaymentsR,classCostsR,saleCostsR,cashR];
     const firstError = results.find(r=>r.error);
     if(firstError) throw firstError.error;
 
@@ -664,7 +714,7 @@ async function loadState(){
     document.getElementById('login-hint').textContent = '';
     state = {
       courses: await Promise.all(coursesR.data.map(rowToCourse)),
-      paymentMethods: paymentsR.data.map(r=>({id:r.id, name:r.name})),
+      paymentMethods: paymentsR.data.map(r=>({id:r.id, name:r.name, settlementDays:Number(r.settlement_days||0)})),
       closers: closersR.data.map(r=>({id:r.id, name:r.name, commissionPercent:r.commission_percent, acceleratorThreshold:r.accelerator_threshold, acceleratorPercent:r.accelerator_percent})),
       users: usersR.data.map(r=>({id:r.id, name:r.name, login:r.login, authUserId:r.auth_user_id, role:r.role, closerId:r.closer_id||''})),
       leads: leadsR.data.map(r=>({
@@ -675,11 +725,12 @@ async function loadState(){
       meetings: meetingsR.data.map(r=>({id:r.id, leadId:r.lead_id, closerId:r.closer_id||'', scheduledDate:r.scheduled_date, status:r.status, notes:r.notes})),
       sales: salesR.data.map(r=>({nfIssued:!!r.nf_issued, id:r.id, studentName:r.student_name, leadId:r.lead_id, courseId:r.course_id, classId:r.class_id||'', closerId:r.closer_id, closer2Id:r.closer2_id||'', splitPercent:r.split_percent==null?100:Number(r.split_percent), value:r.value, listPrice:r.list_price, paymentMethod:r.payment_method, date:r.date, notes:r.notes||''})),
       classes: classesR.data.map(r=>({id:r.id, courseId:r.course_id, name:r.name, startDate:r.start_date, endDate:r.end_date, capacity:r.capacity||0, price:r.price})),
-      salePayments: salePaymentsR.data.map(r=>({id:r.id, saleId:r.sale_id, amount:r.amount, date:r.date, paymentMethod:r.payment_method, notes:r.notes||'', status:r.status||'recebido'})),
+      salePayments: salePaymentsR.data.map(r=>({id:r.id, saleId:r.sale_id, amount:r.amount, date:r.date, paymentMethod:r.payment_method, notes:r.notes||'', status:r.status||'recebido', installments:Math.max(1, Number(r.installments||1))})),
       classEnrollments: enrollmentsR.data.map(r=>({id:r.id, classId:r.class_id, studentId:r.student_id, notes:r.notes||'', nfIssued:!!r.nf_issued})),
       commissionPayments: commPaymentsR.data.map(r=>({id:r.id, closerId:r.closer_id, amount:Number(r.amount||0), date:r.date, notes:r.notes||''})),
       classCosts: classCostsR.data.map(r=>({id:r.id, classId:r.class_id, description:r.description||'', amount:Number(r.amount||0), date:r.date})),
-      saleCosts: saleCostsR.data.map(r=>({id:r.id, saleId:r.sale_id, kind:r.kind||'operacional', description:r.description||'', mode:r.mode||'valor', percent:r.percent==null?null:Number(r.percent), paymentMethod:r.payment_method||'', amount:Number(r.amount||0), baseAmount:r.base_amount==null?null:Number(r.base_amount)})),
+      cashEntries: cashR.data.map(r=>({id:r.id, kind:r.kind||'despesa', description:r.description||'', category:r.category||'', amount:Number(r.amount||0), dueDate:r.due_date, paidDate:r.paid_date, recurring:!!r.recurring, notes:r.notes||''})),
+      saleCosts: saleCostsR.data.map(r=>({id:r.id, saleId:r.sale_id, kind:r.kind||'operacional', description:r.description||'', mode:r.mode||'valor', percent:r.percent==null?null:Number(r.percent), paymentMethod:r.payment_method||'', amount:Number(r.amount||0), baseAmount:r.base_amount==null?null:Number(r.base_amount), paymentId:r.payment_id||''})),
       students: await Promise.all(studentsR.data.map(async r=>({
         id:r.id, name:r.name, phone:r.phone, phones:(Array.isArray(r.phones)&&r.phones.length)?r.phones:(r.phone?[r.phone]:[]), email:r.email, cpf:r.cpf, professionalRegistration:r.professional_registration, cep:r.cep, address:r.address,
         courseHistory: await Promise.all(historyR.data.filter(h=>h.student_id===r.id).map(rowToHistory)),
@@ -843,7 +894,7 @@ function render(){
   renderNav();
   renderCourseFilterOptions();
   const titleMap = {dashboard:'Dashboard', students:'Alunas', leads:'Leads', meetings:'Reuniões',
-    sales:'Vendas', contracts:'Contratos', commissions:'Comissionamento', courses:'Cursos', classes:'Turmas', payments:'Formas de Pagamento', users:'Usuários e Acessos', backup:'Backup de Dados'};
+    sales:'Vendas', contracts:'Contratos', commissions:'Comissionamento', cash:'Fluxo de Caixa', courses:'Cursos', classes:'Turmas', payments:'Formas de Pagamento', users:'Usuários e Acessos', backup:'Backup de Dados'};
   document.getElementById('page-title').textContent = titleMap[currentTab];
   document.getElementById('page-sub').textContent = courseFilter==='all' ? 'Todos os cursos' : courseName(courseFilter);
   const el = document.getElementById('content');
@@ -854,6 +905,7 @@ function render(){
   else if(currentTab==='sales') el.innerHTML = renderSales();
   else if(currentTab==='contracts') el.innerHTML = renderContracts();
   else if(currentTab==='commissions') el.innerHTML = renderCommissions();
+  else if(currentTab==='cash') el.innerHTML = renderCash();
   else if(currentTab==='courses') el.innerHTML = renderCourses();
   else if(currentTab==='classes') el.innerHTML = renderClasses();
   else if(currentTab==='payments') el.innerHTML = renderPayments();
@@ -1841,8 +1893,8 @@ function salePaymentsSectionHtml(saleId, totalOverride){
           return `
           <tr>
             <td class="mono">${fmtDate(p.date)}</td>
-            <td class="mono" style="font-weight:600;color:var(--ink);">${fmtCurrency(p.amount)}</td>
-            <td>${escapeHtml(paymentName(p.paymentMethod))}</td>
+            <td class="mono" style="font-weight:600;color:var(--ink);">${fmtCurrency(p.amount)}${(()=>{ const n=Math.max(1,Number(p.installments||1)); const fee=paymentFee(p); if(n===1 && fee<=0) return ''; const liq=(Number(p.amount||0)-fee)/n; return `<div style="font-size:10.5px;color:var(--ink-soft);font-weight:400;">${n>1?`${n}x de ${fmtCurrency(liq)} líquidos`:`líquido ${fmtCurrency(liq)}`}</div>`; })()}</td>
+            <td>${escapeHtml(paymentName(p.paymentMethod))}${methodSettlementDays(p.paymentMethod)>0?`<div style="font-size:10.5px;color:var(--ink-soft);">D+${methodSettlementDays(p.paymentMethod)}</div>`:''}</td>
             <td>${prev ? `<span class="badge ${venc?'b-atrasado':'b-previsto'}">${venc?'Atrasado':'Previsto'}</span>` : '<span class="badge b-quitado">Recebido</span>'}</td>
             <td style="font-size:12px;color:var(--ink-soft);">${escapeHtml(p.notes||'')}</td>
             <td style="text-align:right;white-space:nowrap;">${prev?`<button type="button" class="ghost" onclick="receiveSalePayment('${p.id}')">Receber</button>`:''}<button type="button" class="danger-ghost" onclick="removeSalePayment('${p.id}')">Remover</button></td>
@@ -1856,9 +1908,10 @@ function salePaymentsSectionHtml(saleId, totalOverride){
       <div><label>Forma</label><select id="f-pay-method">${state.paymentMethods.map(p=>`<option value="${p.id}" ${sale.paymentMethod===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select></div>
       <div><label>Obs.</label><input id="f-pay-notes" placeholder="ex: 2ª parcela"></div>
       <div><label>Tipo</label><select id="f-pay-status"><option value="recebido">Recebido</option><option value="previsto">Previsto (combinado)</option></select></div>
+      <div><label>Parcelas</label><input type="number" min="1" max="36" step="1" id="f-pay-installments" value="1" title="Em quantas vezes foi negociado. No cartão, cada parcela cai D+30."></div>
       <div><button type="button" class="primary" onclick="addSalePayment('${saleId}')">Lançar</button></div>
     </div>
-    <p class="sale-hint" style="margin:6px 0 0;">Use <strong>Recebido</strong> para dinheiro que já entrou e <strong>Previsto</strong> para o que ficou combinado — o previsto não entra no "Recebido" e vira lembrete de cobrança no mês do vencimento. Ao lançar, a venda inteira é salva automaticamente.</p>
+    <p class="sale-hint" style="margin:6px 0 0;">Use <strong>Recebido</strong> para dinheiro que já entrou e <strong>Previsto</strong> para o que ficou combinado — o previsto não entra no "Recebido" e vira lembrete de cobrança no mês do vencimento. Ao lançar, a venda inteira é salva automaticamente. Em <strong>Parcelas</strong>, informe em quantas vezes foi negociado: no cartão cada parcela cai na conta a cada ${methodSettlementDays(sale.paymentMethod)||30} dias e entra no Fluxo de Caixa já com a taxa descontada.</p>
     <div id="sale-costs">${saleCostsSectionHtml(saleId)}</div>
   `;
 }
@@ -1875,21 +1928,26 @@ function saleCostsSectionHtml(saleId){
     <div class="section-head" style="margin-top:14px;margin-bottom:8px;"><h3 style="font-size:15px;">Custos e impostos da venda</h3>${costs.length?`<span class="mono" style="font-size:13px;color:var(--danger);font-weight:600;">${fmtCurrency(total)}</span>`:''}</div>
     <div class="pay-list">
       <table>
-        <thead><tr><th>Descrição</th><th>Tipo</th><th>Cálculo</th><th>Valor</th><th></th></tr></thead>
+        <thead><tr><th>Descrição</th><th>Tipo</th><th>Cálculo</th><th>Referente a</th><th>Valor</th><th></th></tr></thead>
         <tbody>
         ${costs.length ? costs.map(c=>`<tr>
           <td style="font-weight:600;color:var(--ink);">${escapeHtml(c.description||'(sem descrição)')}</td>
           <td><span class="badge ${c.kind==='imposto'?'b-parcial':(c.kind==='taxa'?'b-previsto':'b-novo')}">${COST_KINDS[c.kind]||c.kind}</span></td>
           <td style="font-size:12px;color:var(--ink-soft);">${escapeHtml(saleCostLabel(sale,c))}</td>
+          <td style="font-size:12px;color:var(--ink-soft);">${(()=>{ const pp=state.salePayments.find(x=>x.id===c.paymentId); return pp ? `${fmtDate(pp.date)} · ${fmtCurrency(pp.amount)}` : '<span style="color:var(--ink-soft);">toda a venda</span>'; })()}</td>
           <td class="mono" style="font-weight:600;">${fmtCurrency(saleCostAmount(sale,c))}</td>
           <td style="text-align:right;"><button type="button" class="danger-ghost" onclick="removeSaleCost('${c.id}')">Remover</button></td>
-        </tr>`).join('') : `<tr class="empty-row"><td colspan="5" style="padding:14px;">Nenhum custo lançado nesta venda.</td></tr>`}
+        </tr>`).join('') : `<tr class="empty-row"><td colspan="6" style="padding:14px;">Nenhum custo lançado nesta venda.</td></tr>`}
         </tbody>
       </table>
     </div>
     <div class="salecost-add">
       <div class="wide"><label>Descrição</label><input id="f-sc-desc" placeholder="ex: taxa da maquininha, ISS"></div>
       <div><label>Tipo</label><select id="f-sc-kind" onchange="onSaleCostKindChange()"><option value="taxa">Taxa de pagamento</option><option value="imposto">Imposto</option><option value="operacional">Custo operacional</option></select></div>
+      <div id="f-sc-pay-wrap"><label>Taxa referente a</label><select id="f-sc-payment" onchange="updateSaleCostPreview()">
+        <option value="">— não vincular —</option>
+        ${salePayments(saleId).map(pp=>{ const n=Math.max(1,Number(pp.installments||1)); return `<option value="${pp.id}">${fmtDate(pp.date)} · ${fmtCurrency(pp.amount)}${n>1?` (${n}x)`:''} · ${escapeHtml(paymentName(pp.paymentMethod))}</option>`; }).join('')}
+      </select></div>
       <div class="wide"><label>Cálculo</label><select id="f-sc-mode" onchange="onSaleCostModeChange()">
         <option value="valor">Valor fixo (R$)</option>
         <option value="pct_venda">% sobre o valor da venda</option>
@@ -1921,6 +1979,8 @@ function onSaleCostKindChange(){
 }
 function onSaleCostModeChange(){
   const mode = document.getElementById('f-sc-mode').value;
+  const payWrap = document.getElementById('f-sc-pay-wrap');
+  if(payWrap) payWrap.style.display = document.getElementById('f-sc-kind').value==='taxa' ? 'block' : 'none';
   const pct = mode !== 'valor';
   document.getElementById('f-sc-base-wrap').style.display = (mode==='pct_base') ? 'block' : 'none';
   document.getElementById('f-sc-vlabel').textContent = pct ? 'Percentual (%)' : 'Valor (R$)';
@@ -1936,7 +1996,12 @@ function updateSaleCostPreview(){
   const base = saleCostBase(sale, mode, null, moneyValue('f-sc-base'));
   const sobre = `do ${COST_BASE_LABEL[mode]}`;
   el.className = 'cost-preview';
-  el.textContent = `${val}% ${sobre} (${fmtCurrency(base)}) = ${fmtCurrency(base*val/100)}`;
+  const payEl = document.getElementById('f-sc-payment');
+  const pp = payEl && payEl.value ? state.salePayments.find(x=>x.id===payEl.value) : null;
+  const n = pp ? Math.max(1, Number(pp.installments||1)) : 1;
+  const taxa = base*val/100;
+  el.textContent = `${val}% ${sobre} (${fmtCurrency(base)}) = ${fmtCurrency(taxa)}`
+    + (pp ? ` · descontado do lançamento de ${fmtDate(pp.date)}${n>1?`, ${n}x de ${fmtCurrency((Number(pp.amount||0)-taxa)/n)} líquidos`:` (líquido ${fmtCurrency(Number(pp.amount||0)-taxa)})`}` : '');
 }
 function refreshSaleCosts(saleId){
   const el = document.getElementById('sale-costs');
@@ -1955,9 +2020,10 @@ async function addSaleCost(saleId){
     percent: mode==='valor' ? null : raw,
     paymentMethod: '',
     amount: mode==='valor' ? raw : 0,
-    baseAmount };
+    baseAmount,
+    paymentId: (kind==='taxa' ? (document.getElementById('f-sc-payment')?.value || '') : '') };
   if(!(await persistSale())) return;
-  const {error} = await sb.from('sale_costs').insert({id:c.id, sale_id:c.saleId, kind:c.kind, description:c.description, mode:c.mode, percent:c.percent, payment_method:c.paymentMethod||null, amount:c.amount, base_amount:c.baseAmount});
+  const {error} = await sb.from('sale_costs').insert({id:c.id, sale_id:c.saleId, kind:c.kind, description:c.description, mode:c.mode, percent:c.percent, payment_method:c.paymentMethod||null, amount:c.amount, base_amount:c.baseAmount, payment_id:c.paymentId||null});
   if(error){ alert('Erro ao lançar custo: '+error.message); return; }
   state.saleCosts.push(c);
   refreshSaleCosts(saleId);
@@ -1983,9 +2049,10 @@ async function addSalePayment(saleId){
   const statusEl = document.getElementById('f-pay-status');
   const status = statusEl ? statusEl.value : 'recebido';
   const p = { id: uid(), saleId, amount, date: document.getElementById('f-pay-date').value||null,
-    paymentMethod: document.getElementById('f-pay-method').value||null, notes: document.getElementById('f-pay-notes').value.trim(), status };
+    paymentMethod: document.getElementById('f-pay-method').value||null, notes: document.getElementById('f-pay-notes').value.trim(), status,
+    installments: Math.max(1, parseInt(document.getElementById('f-pay-installments').value,10)||1) };
   if(!(await persistSale())) return;
-  const {error} = await sb.from('sale_payments').insert({id:p.id, sale_id:p.saleId, amount:p.amount, date:p.date, payment_method:p.paymentMethod, notes:p.notes||null, status:p.status});
+  const {error} = await sb.from('sale_payments').insert({id:p.id, sale_id:p.saleId, amount:p.amount, date:p.date, payment_method:p.paymentMethod, notes:p.notes||null, status:p.status, installments:p.installments});
   if(error){ alert('Erro ao registrar pagamento: '+error.message); return; }
   state.salePayments.push(p);
   refreshSalePayments(saleId);
@@ -1998,7 +2065,7 @@ async function markSalePaid(saleId){
   if(open<=0) return;
   if(!confirm(`Registrar pagamento de ${fmtCurrency(open)} com a data de hoje e marcar a venda como quitada?`)) return;
   const method = document.getElementById('f-pay-method')?.value || sale.paymentMethod || state.paymentMethods[0]?.id || null;
-  const p = { id: uid(), saleId, amount: open, date: hoje(), paymentMethod: method, notes: 'Quitação', status:'recebido' };
+  const p = { id: uid(), saleId, amount: open, date: hoje(), paymentMethod: method, notes: 'Quitação', status:'recebido', installments:1 };
   if(!(await persistSale())) return;
   const {error} = await sb.from('sale_payments').insert({id:p.id, sale_id:p.saleId, amount:p.amount, date:p.date, payment_method:p.paymentMethod, notes:p.notes, status:'recebido'});
   if(error){ alert('Erro ao registrar quitação: '+error.message); return; }
@@ -2429,6 +2496,266 @@ function openClassModal(id, courseId){
   openModal();
 }
 
+/* ---------- FLUXO DE CAIXA ---------- */
+let cashMonth = hoje().slice(0,7);
+function setCashMonth(m){ cashMonth = m; render(); }
+const CASH_CATEGORIES = ['Estrutura','Pessoal','Marketing','Impostos','Operacional','Financeiro','Outros'];
+
+// Entradas automáticas: parcelas das vendas que caem no mês, já líquidas de taxa.
+function cashInflows(month){
+  const out = [];
+  scopeByRole(state.sales).forEach(sale=>{
+    salePayments(sale.id).forEach(p=>{
+      paymentSchedule(p).forEach(par=>{
+        if(ym(par.date)!==month) return;
+        out.push({tipo:'venda', date:par.date, amount:par.amount, bruto:par.bruto, taxa:par.taxa,
+          realizado:par.realizado, sale, parcela:par.parcela, total:par.total, method:p.paymentMethod, paymentId:p.id});
+      });
+    });
+  });
+  state.cashEntries.filter(e=>e.kind==='entrada' && ym(e.dueDate)===month).forEach(e=>{
+    out.push({tipo:'manual', date:e.dueDate, amount:Number(e.amount||0), realizado:!!e.paidDate, entry:e});
+  });
+  return out.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+}
+
+// Saídas: despesas manuais + custos de turma + repasses de comissão já pagos.
+function cashOutflows(month){
+  const out = [];
+  state.cashEntries.filter(e=>e.kind==='despesa' && ym(e.dueDate)===month).forEach(e=>{
+    out.push({tipo:'manual', date:e.dueDate, amount:Number(e.amount||0), realizado:!!e.paidDate, entry:e,
+      descricao:e.description, categoria:e.category||'—'});
+  });
+  state.classCosts.filter(c=>ym(c.date)===month).forEach(c=>{
+    const cl = classById(c.classId);
+    out.push({tipo:'turma', date:c.date, amount:Number(c.amount||0), realizado:true,
+      descricao:c.description, categoria:cl?`Turma · ${cl.name}`:'Turma'});
+  });
+  state.commissionPayments.filter(c=>ym(c.date)===month).forEach(c=>{
+    const closer = state.closers.find(x=>x.id===c.closerId);
+    out.push({tipo:'comissao', date:c.date, amount:Number(c.amount||0), realizado:true,
+      descricao:`Comissão — ${closer?closer.name:'closer'}`, categoria:'Comissões'});
+  });
+  return out.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+}
+
+// Vencidos de meses anteriores que ainda não entraram/saíram.
+function cashOverdue(month){
+  const h = hoje();
+  const inflow = [];
+  scopeByRole(state.sales).forEach(sale=>{
+    salePayments(sale.id).forEach(p=>{
+      paymentSchedule(p).forEach(par=>{
+        if(par.realizado || !par.date || par.date >= h || ym(par.date) >= month) return;
+        inflow.push({date:par.date, amount:par.amount, sale, parcela:par.parcela, total:par.total});
+      });
+    });
+  });
+  const outflow = state.cashEntries.filter(e=>e.kind==='despesa' && !e.paidDate && e.dueDate && e.dueDate < h && ym(e.dueDate) < month)
+    .map(e=>({date:e.dueDate, amount:Number(e.amount||0), entry:e}));
+  return {inflow: inflow.sort((a,b)=>a.date.localeCompare(b.date)), outflow: outflow.sort((a,b)=>a.date.localeCompare(b.date))};
+}
+
+function renderCash(){
+  const month = cashMonth;
+  const ins = cashInflows(month), outs = cashOutflows(month), atraso = cashOverdue(month);
+  const totIn = ins.reduce((a,x)=>a+x.amount,0), totInOk = ins.filter(x=>x.realizado).reduce((a,x)=>a+x.amount,0);
+  const totOut = outs.reduce((a,x)=>a+x.amount,0), totOutOk = outs.filter(x=>x.realizado).reduce((a,x)=>a+x.amount,0);
+  const saldo = totIn - totOut;
+  const atrasoIn = atraso.inflow.reduce((a,x)=>a+x.amount,0), atrasoOut = atraso.outflow.reduce((a,x)=>a+x.amount,0);
+  return `
+    <div class="toolbar">
+      <div class="month-nav">
+        <button type="button" onclick="setCashMonth('${ymShift(month,-1)}')">◀</button>
+        <strong>${ymLabel(month)}</strong>
+        <button type="button" onclick="setCashMonth('${ymShift(month,1)}')">▶</button>
+        ${month!==hoje().slice(0,7)?`<button type="button" class="ghost" onclick="setCashMonth('${hoje().slice(0,7)}')">Mês atual</button>`:''}
+      </div>
+      <div>
+        <button class="ghost" style="border:1px solid var(--border);" onclick="copyRecurringExpenses()">Trazer recorrentes do mês anterior</button>
+        <button class="primary" onclick="openCashEntryModal(null,'despesa')">+ Despesa</button>
+        <button class="primary" onclick="openCashEntryModal(null,'entrada')">+ Entrada manual</button>
+      </div>
+    </div>
+    <div class="grid-metrics">
+      <div class="metric"><div class="label">Entradas do mês</div><div class="value teal mono">${fmtPrice(totIn)}</div><div class="metric-sub">recebido ${fmtPrice(totInOk)}</div></div>
+      <div class="metric"><div class="label">Saídas do mês</div><div class="value danger mono">${fmtPrice(totOut)}</div><div class="metric-sub">pago ${fmtPrice(totOutOk)}</div></div>
+      <div class="metric"><div class="label">Saldo do mês</div><div class="value ${saldo>=0?'gold':'danger'} mono">${fmtPrice(saldo)}</div><div class="metric-sub">entradas − saídas</div></div>
+    </div>
+
+    ${(atraso.inflow.length||atraso.outflow.length) ? `
+    <div class="card" style="margin-bottom:16px;border-color:var(--danger);">
+      <div class="section-head"><h3 style="color:var(--danger);">Em atraso (meses anteriores)</h3>
+        <div style="font-size:12.5px;color:var(--ink-soft);">a receber <span class="mono" style="color:var(--danger);font-weight:600;">${fmtPrice(atrasoIn)}</span>${atrasoOut>0?` · a pagar <span class="mono" style="color:var(--danger);font-weight:600;">${fmtPrice(atrasoOut)}</span>`:''}</div>
+      </div>
+      <table>
+        <tbody>
+        ${atraso.inflow.map(x=>`<tr class="due-row" onclick="switchTab('sales');openSaleModal('${x.sale.id}')">
+          <td class="mono">${fmtDate(x.date)}</td>
+          <td style="font-weight:600;color:var(--ink);">${escapeHtml(x.sale.studentName)}</td>
+          <td>${escapeHtml(courseName(x.sale.courseId))}${x.total>1?` · ${x.parcela}/${x.total}`:''}</td>
+          <td class="mono" style="text-align:right;color:var(--danger);font-weight:600;">+ ${fmtPrice(x.amount)}</td>
+        </tr>`).join('')}
+        ${atraso.outflow.map(x=>`<tr>
+          <td class="mono">${fmtDate(x.date)}</td>
+          <td style="font-weight:600;color:var(--ink);">${escapeHtml(x.entry.description||'')}</td>
+          <td>${escapeHtml(x.entry.category||'—')}</td>
+          <td class="mono" style="text-align:right;color:var(--danger);font-weight:600;">− ${fmtPrice(x.amount)}</td>
+        </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : ''}
+
+    <div class="card" style="margin-bottom:16px;">
+      <div class="section-head"><h3>Entradas</h3><span class="mono" style="color:var(--teal);font-weight:600;">${fmtPrice(totIn)}</span></div>
+      <table>
+        <thead><tr><th>Data</th><th>Origem</th><th>Forma</th><th style="text-align:right;">Bruto</th><th style="text-align:right;">Taxa</th><th style="text-align:right;">Líquido</th><th>Situação</th><th></th></tr></thead>
+        <tbody>
+        ${ins.length ? ins.map(x=>x.tipo==='venda' ? `
+          <tr class="due-row" onclick="switchTab('sales');openSaleModal('${x.sale.id}')">
+            <td class="mono">${fmtDate(x.date)}</td>
+            <td style="font-weight:600;color:var(--ink);">${escapeHtml(x.sale.studentName)}<div style="font-size:11px;color:var(--ink-soft);font-weight:400;">${escapeHtml(courseName(x.sale.courseId))}${x.total>1?` · parcela ${x.parcela}/${x.total}`:''}</div></td>
+            <td>${escapeHtml(paymentName(x.method))}</td>
+            <td class="mono" style="text-align:right;color:var(--ink-soft);">${fmtPrice(x.bruto)}</td>
+            <td class="mono" style="text-align:right;color:var(--ink-soft);">${x.taxa>0?'− '+fmtPrice(x.taxa):'—'}</td>
+            <td class="mono" style="text-align:right;font-weight:600;">${fmtPrice(x.amount)}</td>
+            <td><span class="badge ${x.realizado?'b-quitado':'b-previsto'}">${x.realizado?'Na conta':'A receber'}</span></td>
+            <td></td>
+          </tr>` : `
+          <tr>
+            <td class="mono">${fmtDate(x.date)}</td>
+            <td style="font-weight:600;color:var(--ink);">${escapeHtml(x.entry.description||'')}<div style="font-size:11px;color:var(--ink-soft);font-weight:400;">${escapeHtml(x.entry.category||'Entrada manual')}</div></td>
+            <td>—</td>
+            <td class="mono" style="text-align:right;color:var(--ink-soft);">${fmtPrice(x.amount)}</td>
+            <td class="mono" style="text-align:right;color:var(--ink-soft);">—</td>
+            <td class="mono" style="text-align:right;font-weight:600;">${fmtPrice(x.amount)}</td>
+            <td><span class="badge ${x.realizado?'b-quitado':'b-previsto'}">${x.realizado?'Na conta':'A receber'}</span></td>
+            <td style="text-align:right;white-space:nowrap;">
+              ${x.realizado?'':`<button class="ghost" onclick="toggleCashPaid('${x.entry.id}')">Recebi</button>`}
+              <button class="ghost" onclick="openCashEntryModal('${x.entry.id}')">Editar</button>
+              <button class="danger-ghost" onclick="removeCashEntry('${x.entry.id}')">Excluir</button>
+            </td>
+          </tr>`).join('') : `<tr class="empty-row"><td colspan="8">Nenhuma entrada neste mês.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="section-head"><h3>Saídas</h3><span class="mono" style="color:var(--danger);font-weight:600;">${fmtPrice(totOut)}</span></div>
+      <table>
+        <thead><tr><th>Vencimento</th><th>Descrição</th><th>Categoria</th><th style="text-align:right;">Valor</th><th>Situação</th><th></th></tr></thead>
+        <tbody>
+        ${outs.length ? outs.map(x=>`
+          <tr>
+            <td class="mono">${fmtDate(x.date)}</td>
+            <td style="font-weight:600;color:var(--ink);">${escapeHtml(x.descricao||'')}${x.entry&&x.entry.recurring?' <span class="badge b-novo" style="font-size:10px;padding:1px 6px;">mensal</span>':''}</td>
+            <td style="font-size:12.5px;color:var(--ink-soft);">${escapeHtml(x.categoria||'—')}</td>
+            <td class="mono" style="text-align:right;font-weight:600;">${fmtPrice(x.amount)}</td>
+            <td><span class="badge ${x.realizado?'b-quitado':((x.date||'')<hoje()?'b-atrasado':'b-previsto')}">${x.realizado?'Pago':((x.date||'')<hoje()?'Atrasado':'A pagar')}</span></td>
+            <td style="text-align:right;white-space:nowrap;">
+              ${x.tipo==='manual' ? `
+                ${x.realizado?`<button class="ghost" onclick="toggleCashPaid('${x.entry.id}')">Desfazer</button>`:`<button class="ghost" onclick="toggleCashPaid('${x.entry.id}')">Paguei</button>`}
+                <button class="ghost" onclick="openCashEntryModal('${x.entry.id}')">Editar</button>
+                <button class="danger-ghost" onclick="removeCashEntry('${x.entry.id}')">Excluir</button>`
+              : `<span style="font-size:11.5px;color:var(--ink-soft);">${x.tipo==='turma'?'lançado na turma':'repasse de comissão'}</span>`}
+            </td>
+          </tr>`).join('') : `<tr class="empty-row"><td colspan="6">Nenhuma saída neste mês.</td></tr>`}
+        </tbody>
+      </table>
+      <p class="sale-hint" style="margin:10px 0 0;">Custos de turma e repasses de comissão entram aqui automaticamente, na data em que foram lançados. Impostos da venda continuam no resultado da turma — lance a guia aqui como despesa, na data de vencimento.</p>
+    </div>
+  `;
+}
+
+function openCashEntryModal(id, kind){
+  const e = id ? state.cashEntries.find(x=>x.id===id) : null;
+  editing = e || null;
+  const tipo = e ? e.kind : (kind||'despesa');
+  const diaPadrao = `${cashMonth}-${String(Math.min(new Date().getDate(), 28)).padStart(2,'0')}`;
+  document.getElementById('modal').innerHTML = `
+    <h3>${e?'Editar ':''}${tipo==='entrada'?'Entrada manual':'Despesa'}</h3>
+    <div class="field"><label class="field-label">Descrição</label><input id="f-ce-desc" value="${escapeHtml(e?e.description:'')}" placeholder="${tipo==='entrada'?'ex: aluguel de sala, consultoria':'ex: luz, internet, guia do Simples'}"></div>
+    <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
+      <div class="field"><label class="field-label">Valor (R$)</label><input type="text" inputmode="decimal" id="f-ce-amount" value="${e?fmtMoneyInput(e.amount):''}" placeholder="0,00" onblur="onMoneyBlur(this)"></div>
+      <div class="field"><label class="field-label">${tipo==='entrada'?'Data prevista':'Vencimento'}</label><input type="date" id="f-ce-due" value="${e?(e.dueDate||''):diaPadrao}"></div>
+    </div>
+    <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
+      <div class="field"><label class="field-label">Categoria</label>
+        <input id="f-ce-cat" list="cash-cats" value="${escapeHtml(e?e.category:'')}" placeholder="ex: Estrutura">
+        <datalist id="cash-cats">${Array.from(new Set([...CASH_CATEGORIES, ...state.cashEntries.map(x=>x.category).filter(Boolean)])).map(c=>`<option value="${escapeHtml(c)}">`).join('')}</datalist>
+      </div>
+      <div class="field"><label class="field-label">${tipo==='entrada'?'Data do recebimento':'Data do pagamento'}</label><input type="date" id="f-ce-paid" value="${e?(e.paidDate||''):''}"><p class="sale-hint" style="margin:4px 0 0;">Deixe vazio enquanto não ${tipo==='entrada'?'entrou':'foi pago'}.</p></div>
+    </div>
+    ${tipo==='despesa' ? `<div class="field"><label class="field-label"><input type="checkbox" id="f-ce-rec" ${e&&e.recurring?'checked':''} style="width:auto;margin-right:6px;">Repete todo mês (luz, aluguel, software...)</label></div>` : ''}
+    <div class="modal-actions">
+      <button onclick="closeModal()">Cancelar</button>
+      <button class="primary" onclick="saveCashEntry('${tipo}')">Salvar</button>
+    </div>`;
+  openModal();
+}
+
+async function saveCashEntry(tipo){
+  const description = document.getElementById('f-ce-desc').value.trim();
+  const amount = moneyValue('f-ce-amount');
+  if(!description){ alert('Informe a descrição.'); return; }
+  if(amount<=0){ alert('Informe o valor.'); return; }
+  const recEl = document.getElementById('f-ce-rec');
+  const data = {
+    id: editing ? editing.id : uid(),
+    kind: editing ? editing.kind : tipo,
+    description, amount,
+    category: document.getElementById('f-ce-cat').value.trim(),
+    dueDate: document.getElementById('f-ce-due').value || null,
+    paidDate: document.getElementById('f-ce-paid').value || null,
+    recurring: recEl ? recEl.checked : (editing ? editing.recurring : false),
+    notes: '',
+  };
+  const {error} = await sb.from('cash_entries').upsert({id:data.id, kind:data.kind, description:data.description, category:data.category||null,
+    amount:data.amount, due_date:data.dueDate, paid_date:data.paidDate, recurring:data.recurring, notes:null});
+  if(error){ alert('Erro ao salvar: '+error.message); return; }
+  if(editing){ Object.assign(editing, data); } else { state.cashEntries.push(data); }
+  if(data.dueDate) cashMonth = ym(data.dueDate);
+  closeModal(); render();
+}
+
+async function toggleCashPaid(id){
+  const e = state.cashEntries.find(x=>x.id===id); if(!e) return;
+  const novo = e.paidDate ? null : hoje();
+  const {error} = await sb.from('cash_entries').update({paid_date:novo}).eq('id', id);
+  if(error){ alert('Erro ao atualizar: '+error.message); return; }
+  e.paidDate = novo;
+  render();
+}
+
+async function removeCashEntry(id){
+  const e = state.cashEntries.find(x=>x.id===id); if(!e) return;
+  if(!confirm(`Excluir "${e.description}" de ${fmtCurrency(e.amount)}?`)) return;
+  const {error} = await sb.from('cash_entries').delete().eq('id', id);
+  if(error){ alert('Erro ao excluir: '+error.message); return; }
+  state.cashEntries = state.cashEntries.filter(x=>x.id!==id);
+  render();
+}
+
+async function copyRecurringExpenses(){
+  const anterior = ymShift(cashMonth, -1);
+  const base = state.cashEntries.filter(e=>e.kind==='despesa' && e.recurring && ym(e.dueDate)===anterior);
+  if(!base.length){ alert(`Nenhuma despesa marcada como mensal em ${ymLabel(anterior)}.`); return; }
+  const jaTem = new Set(state.cashEntries.filter(e=>ym(e.dueDate)===cashMonth).map(e=>(e.description||'').toLowerCase()));
+  const novas = base.filter(e=>!jaTem.has((e.description||'').toLowerCase()));
+  if(!novas.length){ alert('As despesas mensais deste mês já foram trazidas.'); return; }
+  if(!confirm(`Trazer ${novas.length} despesa(s) de ${ymLabel(anterior)} para ${ymLabel(cashMonth)}? Os valores vêm iguais e você ajusta depois.`)) return;
+  const rows = novas.map(e=>{
+    const dia = (e.dueDate||'').slice(8,10) || '10';
+    return { id: uid(), kind:'despesa', description:e.description, category:e.category, amount:e.amount,
+      dueDate: `${cashMonth}-${dia}`, paidDate:null, recurring:true, notes:'' };
+  });
+  const {error} = await sb.from('cash_entries').insert(rows.map(r=>({id:r.id, kind:r.kind, description:r.description, category:r.category||null,
+    amount:r.amount, due_date:r.dueDate, paid_date:null, recurring:true, notes:null})));
+  if(error){ alert('Erro ao copiar: '+error.message); return; }
+  state.cashEntries.push(...rows);
+  render();
+}
+
 function classCostsSectionHtml(classId){
   const costs = classCosts(classId);
   const res = classResult(classId);
@@ -2647,16 +2974,17 @@ function renderPayments(){
     ${toolbarHtml('Formas de Pagamento','Nova forma','openPaymentModal()')}
     <div class="card">
       <table>
-        <thead><tr><th>Forma de pagamento</th><th></th></tr></thead>
+        <thead><tr><th>Forma de pagamento</th><th>Prazo para cair na conta</th><th></th></tr></thead>
         <tbody>
         ${state.paymentMethods.length ? state.paymentMethods.map(p=>`
           <tr>
             <td style="font-weight:600;color:var(--ink);">${escapeHtml(p.name)}</td>
+            <td class="mono">${Number(p.settlementDays||0)>0 ? `D+${p.settlementDays}` : 'no mesmo dia'}</td>
             <td style="text-align:right;white-space:nowrap;">
               <button class="ghost" onclick="openPaymentModal('${p.id}')">Editar</button>
               <button class="danger-ghost" onclick="deleteItem('paymentMethods','${p.id}')">Excluir</button>
             </td>
-          </tr>`).join('') : `<tr class="empty-row"><td colspan="2">Nenhuma forma de pagamento cadastrada.</td></tr>`}
+          </tr>`).join('') : `<tr class="empty-row"><td colspan="3">Nenhuma forma de pagamento cadastrada.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -2665,10 +2993,12 @@ function renderPayments(){
 
 function openPaymentModal(id){
   editing = id ? state.paymentMethods.find(p=>p.id===id) : null;
-  const p = editing || {name:''};
+  const p = editing || {name:'', settlementDays:0};
   document.getElementById('modal').innerHTML = `
     <h3>${editing?'Editar forma de pagamento':'Nova forma de pagamento'}</h3>
     <div class="field"><label class="field-label">Nome</label><input id="f-name" value="${escapeHtml(p.name)}"></div>
+    <div class="field"><label class="field-label">Dias para o dinheiro cair na conta</label><input type="number" min="0" max="180" step="1" id="f-settlement" value="${Number(p.settlementDays||0)}"></div>
+    <p class="sale-hint" style="margin:-6px 0 12px;">Pix cai no mesmo dia (0). Cartão de crédito costuma ser 30 — e, parcelado, cada parcela cai a cada 30 dias. Usado no Fluxo de Caixa.</p>
     <div class="modal-actions">
       <button onclick="closeModal()">Cancelar</button>
       <button class="primary" onclick="savePayment()">Salvar</button>
@@ -2679,8 +3009,8 @@ function openPaymentModal(id){
 async function savePayment(){
   const name = document.getElementById('f-name').value.trim();
   if(!name){ alert('Informe o nome.'); return; }
-  const data = { id: editing ? editing.id : uid(), name };
-  const {error} = await sb.from('payment_methods').upsert({id:data.id, name:data.name});
+  const data = { id: editing ? editing.id : uid(), name, settlementDays: Math.max(0, parseInt(document.getElementById('f-settlement').value,10)||0) };
+  const {error} = await sb.from('payment_methods').upsert({id:data.id, name:data.name, settlement_days:data.settlementDays});
   if(error){ alert('Erro ao salvar forma de pagamento: '+error.message); return; }
   if(editing){ Object.assign(editing, data); } else { state.paymentMethods.push(data); }
   closeModal(); render();
@@ -2814,7 +3144,7 @@ async function importBackupFile(input){
   if(!parsed.users.find(u=>u.id===meBackup.id)) parsed.users.push(meBackup);
 
   try{
-    for(const table of ['sale_costs','class_costs','commission_payments','class_enrollments','sale_payments','student_course_history','lead_courses','meetings','sales','course_classes','students','leads','users','closers','courses','payment_methods']){
+    for(const table of ['cash_entries','sale_costs','class_costs','commission_payments','class_enrollments','sale_payments','student_course_history','lead_courses','meetings','sales','course_classes','students','leads','users','closers','courses','payment_methods']){
       const {error} = await sb.from(table).delete().neq('id', '__none__');
       if(error) throw error;
     }
@@ -2835,7 +3165,7 @@ async function importBackupFile(input){
       if(error) throw error;
     }
     if((parsed.paymentMethods||[]).length){
-      const {error} = await sb.from('payment_methods').insert(parsed.paymentMethods.map(p=>({id:p.id, name:p.name})));
+      const {error} = await sb.from('payment_methods').insert(parsed.paymentMethods.map(p=>({id:p.id, name:p.name, settlement_days:p.settlementDays||0})));
       if(error) throw error;
     }
     if((parsed.closers||[]).length){
@@ -2879,13 +3209,20 @@ async function importBackupFile(input){
     }
     if((parsed.salePayments||[]).length){
       const {error} = await sb.from('sale_payments').insert(parsed.salePayments.map(p=>({
-        id:p.id, sale_id:p.saleId, amount:p.amount||0, date:p.date||null, payment_method:p.paymentMethod||null, notes:p.notes||null, status:p.status||'recebido',
+        id:p.id, sale_id:p.saleId, amount:p.amount||0, date:p.date||null, payment_method:p.paymentMethod||null, notes:p.notes||null, status:p.status||'recebido', installments:p.installments||1,
       })));
+    }
+    if((parsed.cashEntries||[]).length){
+      const {error} = await sb.from('cash_entries').insert(parsed.cashEntries.map(e=>({
+        id:e.id, kind:e.kind||'despesa', description:e.description||null, category:e.category||null,
+        amount:e.amount||0, due_date:e.dueDate||null, paid_date:e.paidDate||null, recurring:!!e.recurring, notes:e.notes||null,
+      })));
+      if(error) throw error;
     }
     if((parsed.saleCosts||[]).length){
       const {error} = await sb.from('sale_costs').insert(parsed.saleCosts.map(c=>({
         id:c.id, sale_id:c.saleId, kind:c.kind||'operacional', description:c.description||null, mode:c.mode||'valor',
-        percent:c.percent==null?null:c.percent, payment_method:c.paymentMethod||null, amount:c.amount||0, base_amount:c.baseAmount==null?null:c.baseAmount,
+        percent:c.percent==null?null:c.percent, payment_method:c.paymentMethod||null, amount:c.amount||0, base_amount:c.baseAmount==null?null:c.baseAmount, payment_id:c.paymentId||null,
       })));
       if(error) throw error;
       if(error) throw error;
