@@ -518,8 +518,9 @@ function classResult(classId){
   const comissoes = sales.reduce((a,s)=>a+saleCommission(s,s.closerId)+saleCommission(s,s.closer2Id),0);
   const custos = classCosts(classId).reduce((a,c)=>a+Number(c.amount||0),0);
   const custosVendas = sales.reduce((a,s)=>a+saleCostTotal(s.id),0);
-  const lucro = receita - comissoes - custosVendas - custos;
-  return {receita, recebido, comissoes, custos, custosVendas, lucro, margem: receita>0 ? (lucro/receita*100) : 0, qtdCustos: classCosts(classId).length};
+  const aberto = Math.max(0, receita - recebido);
+  const lucro = recebido - comissoes - custosVendas - custos;
+  return {receita, recebido, aberto, comissoes, custos, custosVendas, lucro, margem: recebido>0 ? (lucro/recebido*100) : 0, qtdCustos: classCosts(classId).length};
 }
 function memberNf(m){ return m.sale ? !!m.sale.nfIssued : !!(m.enrollment && m.enrollment.nfIssued); }
 function classNfCount(classId){ const ms=classMembers(classId); return {emitidas: ms.filter(memberNf).length, total: ms.length}; }
@@ -2347,7 +2348,7 @@ function renderClasses(){
   const totCap = upcoming.reduce((a,c)=>a+Number(c.capacity||0),0);
   const totOcc = upcoming.reduce((a,c)=>a+classOccupancy(c.id),0);
   const totFree = upcoming.reduce((a,c)=>{ const cap=Number(c.capacity||0); return a + (cap ? Math.max(0, cap-classOccupancy(c.id)) : 0); },0);
-  const lucroPrevisto = upcoming.reduce((a,c)=>a+classResult(c.id).lucro,0);
+  const lucroPrevisto = upcoming.reduce((a,c)=>a+classResult(c.id).lucro,0); // já sobre o que entrou
   return `
     <div class="toolbar">
       <div class="view-toggle">
@@ -2360,7 +2361,7 @@ function renderClasses(){
       <div class="metric"><div class="label">Turmas próximas</div><div class="value mono">${upcoming.length}</div></div>
       <div class="metric"><div class="label">Alunas matriculadas</div><div class="value teal mono">${totOcc}</div></div>
       <div class="metric"><div class="label">Vagas disponíveis</div><div class="value ${totCap&&totFree===0?'danger':'gold'} mono">${totCap?totFree:'—'}</div></div>
-      ${currentUser.role==='admin' ? `<div class="metric"><div class="label">Lucro previsto (próximas)</div><div class="value ${lucroPrevisto>=0?'teal':'danger'} mono">${fmtPrice(lucroPrevisto)}</div></div>` : ''}
+      ${currentUser.role==='admin' ? `<div class="metric"><div class="label">Lucro realizado (próximas)</div><div class="value ${lucroPrevisto>=0?'teal':'danger'} mono">${fmtPrice(lucroPrevisto)}</div></div>` : ''}
     </div>
     <div class="card">
       <table>
@@ -2384,12 +2385,12 @@ function renderClasses(){
             <td>${qty ? `<span class="badge ${nf.emitidas>=nf.total?'b-quitado':(nf.emitidas?'b-parcial':'b-aberto')}" id="nf-count-${cl.id}">NF ${nf.emitidas}/${nf.total}</span>` : '<span style="color:var(--ink-soft);">—</span>'}</td>
             <td>${qty ? `<details class="class-students"><summary>ver ${qty} aluna${qty===1?'':'s'}${aberto>0?` · ${fmtCurrency(aberto)} em aberto`:''}</summary><ul>${members.map(m=>{ const nfh = nfCheckHtml(cl.id, m, false); const badge = m.sale ? (()=>{ const st=salePayStatus(m.sale); return `<span class="badge ${st.cls}" style="font-size:10px;padding:1px 6px;">${st.label}${st.label!=='Quitado'?' · '+fmtCurrency(saleOpen(m.sale)):''}</span>`; })() : '<span class="badge b-novo" style="font-size:10px;padding:1px 6px;">Manual</span>'; return `<li>${escapeHtml(m.name)} ${badge} ${nfh}</li>`; }).join('')}</ul></details>` : '<span style="color:var(--ink-soft);">—</span>'}</td>
             ${isAdmin ? `<td>${qty||res.custos ? `<details class="class-students"><summary><span class="mono" style="color:${res.lucro>=0?'#2F6B45':'var(--danger)'};font-weight:600;">${fmtPrice(res.lucro)}</span></summary><div class="result-detail" style="margin-top:4px;">
-                Receita <b>${fmtPrice(res.receita)}</b><br>
+                Recebido <b>${fmtPrice(res.recebido)}</b><br>
                 − Comissões <b>${fmtPrice(res.comissoes)}</b><br>
                 − Taxas e impostos das vendas <b>${fmtPrice(res.custosVendas)}</b><br>
                 − Custos da turma (${res.qtdCustos}) <b>${fmtPrice(res.custos)}</b><br>
-                = Lucro <b style="color:${res.lucro>=0?'#2F6B45':'var(--danger)'};">${fmtPrice(res.lucro)}</b>${res.receita>0?` · margem ${res.margem.toFixed(1)}%`:''}<br>
-                <span style="color:var(--ink-soft);">recebido até agora: ${fmtPrice(res.recebido)}</span>
+                = Lucro <b style="color:${res.lucro>=0?'#2F6B45':'var(--danger)'};">${fmtPrice(res.lucro)}</b>${res.recebido>0?` · margem ${res.margem.toFixed(1)}%`:''}<br>
+                <span style="color:var(--ink-soft);">vendido: ${fmtPrice(res.receita)}${res.aberto>0.005?` · a receber: ${fmtPrice(res.aberto)}`:''}</span>
               </div></details>` : '<span style="color:var(--ink-soft);">—</span>'}</td>
             <td style="text-align:right;white-space:nowrap;">
               <button class="ghost" onclick="openClassModal('${cl.id}')">Editar</button>
@@ -2455,13 +2456,13 @@ function classCostsSectionHtml(classId){
     </div>
     <div class="section-head" style="margin-top:16px;margin-bottom:0;"><h3 style="font-size:15px;">Resultado da turma</h3></div>
     <div class="result-box">
-      <div class="box"><div class="label">Receita</div><div class="val gold">${fmtCurrency(res.receita)}</div></div>
+      <div class="box"><div class="label">Recebido</div><div class="val gold">${fmtCurrency(res.recebido)}</div></div>
       <div class="box"><div class="label">Comissões</div><div class="val">${fmtCurrency(res.comissoes)}</div></div>
       <div class="box"><div class="label">Taxas e impostos</div><div class="val ${res.custosVendas>0?'danger':''}">${fmtCurrency(res.custosVendas)}</div></div>
       <div class="box"><div class="label">Custos da turma</div><div class="val ${res.custos>0?'danger':''}">${fmtCurrency(res.custos)}</div></div>
       <div class="box"><div class="label">Lucro</div><div class="val ${res.lucro>=0?'ok':'danger'}">${fmtCurrency(res.lucro)}</div></div>
     </div>
-    <p class="sale-hint" style="margin:0 0 6px;">Lucro = receita das vendas da turma − comissões dos closers − taxas e impostos lançados nas vendas das alunas − custos lançados aqui.${res.receita>0?` Margem de ${res.margem.toFixed(1)}%. Recebido até agora: ${fmtCurrency(res.recebido)}.`:''} Custos são gravados na hora.</p>
+    <p class="sale-hint" style="margin:0 0 6px;">Lucro = <strong>valor efetivamente recebido</strong> das alunas − comissões dos closers − taxas e impostos lançados nas vendas − custos lançados aqui.${res.recebido>0?` Margem de ${res.margem.toFixed(1)}% sobre o recebido.`:''} Vendido: ${fmtCurrency(res.receita)}${res.aberto>0.005?` · ainda a receber: ${fmtCurrency(res.aberto)}`:''}. Custos são gravados na hora.</p>
   `;
 }
 function refreshClassCosts(classId){
