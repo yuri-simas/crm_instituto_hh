@@ -1868,7 +1868,6 @@ function saleCostsSectionHtml(saleId){
   const total = saleCostTotal(saleId);
   const com = saleCommission(sale, sale.closerId) + saleCommission(sale, sale.closer2Id);
   const liquido = Number(sale.value||0) - com - total;
-  const methods = state.paymentMethods.map(m=>`<option value="${m.id}" ${sale.paymentMethod===m.id?'selected':''}>${escapeHtml(m.name)}</option>`).join('');
   return `
     <div class="section-head" style="margin-top:14px;margin-bottom:8px;"><h3 style="font-size:15px;">Custos e impostos da venda</h3>${costs.length?`<span class="mono" style="font-size:13px;color:var(--danger);font-weight:600;">${fmtCurrency(total)}</span>`:''}</div>
     <div class="pay-list">
@@ -1892,10 +1891,8 @@ function saleCostsSectionHtml(saleId){
         <option value="valor">Valor fixo (R$)</option>
         <option value="pct_venda">% sobre o valor da venda</option>
         <option value="pct_recebido">% sobre o valor já recebido</option>
-        <option value="pct_forma">% sobre o pago numa forma</option>
         <option value="pct_base">% sobre um valor que eu informo</option>
       </select></div>
-      <div id="f-sc-method-wrap"><label>Forma de pagamento</label><select id="f-sc-method" onchange="updateSaleCostPreview()">${methods}</select></div>
       <div id="f-sc-base-wrap"><label>Sobre o valor de (R$)</label><input type="text" inputmode="decimal" id="f-sc-base" placeholder="0,00" oninput="updateSaleCostPreview()" onblur="onMoneyBlur(this)"></div>
       <div><label id="f-sc-vlabel">Valor (R$)</label><input type="text" inputmode="decimal" id="f-sc-value" placeholder="0,00" oninput="updateSaleCostPreview()" onblur="onMoneyBlur(this)"></div>
       <div><button type="button" class="primary" onclick="addSaleCost('${saleId}')">Lançar</button></div>
@@ -1907,7 +1904,7 @@ function saleCostsSectionHtml(saleId){
       <div class="box"><div class="label">Taxas e impostos</div><div class="val ${total>0?'danger':''}">${fmtCurrency(total)}</div></div>
       <div class="box"><div class="label">Líquido</div><div class="val ${liquido>=0?'ok':'danger'}">${fmtCurrency(liquido)}</div></div>
     </div>
-    <p class="sale-hint" style="margin:0 0 6px;">Estes custos seguem a aluna e entram automaticamente no resultado da turma em que ela está matriculada. Impostos e taxas podem ser percentuais sobre o valor da venda, sobre o que já foi recebido, sobre o pago em uma forma específica (venda dividida entre Pix e cartão) ou sobre um valor que você informa.</p>
+    <p class="sale-hint" style="margin:0 0 6px;">Estes custos seguem a aluna e entram automaticamente no resultado da turma em que ela está matriculada. Impostos e taxas podem ser um valor fixo ou um percentual sobre o valor da venda, sobre o que já foi recebido ou sobre um valor que você informa.</p>
   `;
 }
 function onSaleCostKindChange(){
@@ -1922,7 +1919,6 @@ function onSaleCostKindChange(){
 function onSaleCostModeChange(){
   const mode = document.getElementById('f-sc-mode').value;
   const pct = mode !== 'valor';
-  document.getElementById('f-sc-method-wrap').style.display = (mode==='pct_forma') ? 'block' : 'none';
   document.getElementById('f-sc-base-wrap').style.display = (mode==='pct_base') ? 'block' : 'none';
   document.getElementById('f-sc-vlabel').textContent = pct ? 'Percentual (%)' : 'Valor (R$)';
   document.getElementById('f-sc-value').placeholder = pct ? '0,00' : '0,00';
@@ -1934,10 +1930,8 @@ function updateSaleCostPreview(){
   const mode = document.getElementById('f-sc-mode').value;
   const val = moneyValue('f-sc-value');
   if(mode==='valor' || !sale || val<=0){ el.textContent=''; el.className='cost-preview empty'; return; }
-  const baseAmount = moneyValue('f-sc-base');
-  const method = document.getElementById('f-sc-method').value;
-  const base = saleCostBase(sale, mode, method, baseAmount);
-  const sobre = mode==='pct_forma' ? `do pago em ${paymentName(method)}` : `do ${COST_BASE_LABEL[mode]}`;
+  const base = saleCostBase(sale, mode, null, moneyValue('f-sc-base'));
+  const sobre = `do ${COST_BASE_LABEL[mode]}`;
   el.className = 'cost-preview';
   el.textContent = `${val}% ${sobre} (${fmtCurrency(base)}) = ${fmtCurrency(base*val/100)}`;
 }
@@ -1956,7 +1950,7 @@ async function addSaleCost(saleId){
   if(mode==='pct_base' && !(baseAmount>0)){ alert('Informe o valor sobre o qual o percentual incide.'); return; }
   const c = { id: uid(), saleId, kind, description, mode,
     percent: mode==='valor' ? null : raw,
-    paymentMethod: mode==='pct_forma' ? document.getElementById('f-sc-method').value : '',
+    paymentMethod: '',
     amount: mode==='valor' ? raw : 0,
     baseAmount };
   if(!(await persistSale())) return;
