@@ -352,10 +352,7 @@ let currentUser = null;
 const TABS = [
   {key:'dashboard', label:'Dashboard', roles:['admin','closer']},
   {key:'students', label:'Alunas', roles:['admin','closer']},
-  {key:'leads', label:'Leads', roles:['admin','closer']},
-  {key:'meetings', label:'Reuniões', roles:['admin','closer']},
   {key:'sales', label:'Vendas', roles:['admin','closer']},
-  {key:'contracts', label:'Contratos', roles:['admin','closer']},
   {key:'commissions', label:'Comissionamento', roles:['admin']},
   {key:'cash', label:'Fluxo de Caixa', roles:['admin']},
   {key:'courses', label:'Cursos', roles:['admin']},
@@ -893,17 +890,14 @@ function filteredStudents(){ return courseFilter==='all' ? state.students : stat
 function render(){
   renderNav();
   renderCourseFilterOptions();
-  const titleMap = {dashboard:'Dashboard', students:'Alunas', leads:'Leads', meetings:'Reuniões',
-    sales:'Vendas', contracts:'Contratos', commissions:'Comissionamento', cash:'Fluxo de Caixa', courses:'Cursos', classes:'Turmas', payments:'Formas de Pagamento', users:'Usuários e Acessos', backup:'Backup de Dados'};
+  const titleMap = {dashboard:'Dashboard', students:'Alunas',
+    sales:'Vendas', commissions:'Comissionamento', cash:'Fluxo de Caixa', courses:'Cursos', classes:'Turmas', payments:'Formas de Pagamento', users:'Usuários e Acessos', backup:'Backup de Dados'};
   document.getElementById('page-title').textContent = titleMap[currentTab];
   document.getElementById('page-sub').textContent = courseFilter==='all' ? 'Todos os cursos' : courseName(courseFilter);
   const el = document.getElementById('content');
   if(currentTab==='dashboard') el.innerHTML = renderDashboard();
   else if(currentTab==='students') el.innerHTML = renderStudents();
-  else if(currentTab==='leads') el.innerHTML = renderLeads();
-  else if(currentTab==='meetings') el.innerHTML = renderMeetings();
   else if(currentTab==='sales') el.innerHTML = renderSales();
-  else if(currentTab==='contracts') el.innerHTML = renderContracts();
   else if(currentTab==='commissions') el.innerHTML = renderCommissions();
   else if(currentTab==='cash') el.innerHTML = renderCash();
   else if(currentTab==='courses') el.innerHTML = renderCourses();
@@ -938,18 +932,12 @@ function monthLabel(){
 }
 
 function renderDashboard(){
-  const leads = filteredLeads();
-  const meetings = filteredMeetings();
   const sales = filteredSales();
 
   const totalVendido = sales.reduce((a,s)=>a+Number(s.value||0),0);
   const totalRecebido = sales.reduce((a,s)=>a+Math.min(Number(s.value||0), salePaid(s.id)),0);
   const totalAberto = sales.reduce((a,s)=>a+saleOpen(s),0);
   const ticket = sales.length ? totalVendido/sales.length : 0;
-  const qtdRealizadas = meetings.filter(m=>m.status==='Realizada').length;
-  const qtdNoShow = meetings.filter(m=>m.status==='No-show').length;
-  const noShowRate = (qtdRealizadas+qtdNoShow) ? Math.round(qtdNoShow/(qtdRealizadas+qtdNoShow)*100) : 0;
-  const conversao = leads.length ? Math.round(sales.length/leads.length*100) : 0;
 
   /* ----- vendas por curso ----- */
   const byCourse = {};
@@ -976,25 +964,15 @@ function renderDashboard(){
   const paymentEntries = Object.entries(byPayment).sort((a,b)=>b[1]-a[1]);
   const maxPay = Math.max(1, ...paymentEntries.map(e=>e[1]));
 
-  const funnelSteps = LEAD_STATUS.map(status=>({
-    label: status,
-    value: leads.filter(l=>l.status===status).length,
-    color: STATUS_COLOR[status] || 'var(--teal)',
-  }));
-
   const closerRows = state.closers.map(c=>{
-    const cLeads = leads.filter(l=>l.closerId===c.id);
-    const cMeetRealizadas = meetings.filter(m=>m.closerId===c.id && m.status==='Realizada').length;
-    const cMeetNoShow = meetings.filter(m=>m.closerId===c.id && m.status==='No-show').length;
     const cSales = sales.filter(s=>saleShare(s,c.id)>0);
     const cValor = cSales.reduce((a,s)=>a+Number(s.value||0)*saleShare(s,c.id),0);
-    const conv = cLeads.length ? Math.round(cSales.length/cLeads.length*100) : 0;
-    return {name:c.name, leads:cLeads.length, realizadas:cMeetRealizadas, noshow:cMeetNoShow, vendas:cSales.length, valor:cValor, conv};
+    return {name:c.name, vendas:cSales.length, valor:cValor};
   }).sort((a,b)=>b.valor-a.valor);
   const semCloser = sales.filter(s=>!s.closerId && !s.closer2Id);
   if(semCloser.length){
-    closerRows.push({name:'Sem closer', leads:0, realizadas:0, noshow:0, vendas:semCloser.length,
-      valor:semCloser.reduce((a,s)=>a+Number(s.value||0),0), conv:0, semCloser:true});
+    closerRows.push({name:'Sem closer', vendas:semCloser.length,
+      valor:semCloser.reduce((a,s)=>a+Number(s.value||0),0), semCloser:true});
   }
 
   return `
@@ -1088,15 +1066,14 @@ function renderDashboard(){
       <div class="card">
         <div class="section-head"><h3>Desempenho por closer</h3></div>
         <table>
-          <thead><tr><th>Closer</th><th style="text-align:right;">Vendas</th><th style="text-align:right;">Valor fechado</th><th style="text-align:right;">Conversão</th></tr></thead>
+          <thead><tr><th>Closer</th><th style="text-align:right;">Vendas</th><th style="text-align:right;">Valor fechado</th></tr></thead>
           <tbody>
           ${closerRows.length ? closerRows.map(r=>`
             <tr>
               <td style="font-weight:600;${r.semCloser?'color:var(--ink-soft);font-style:italic;font-weight:500;':'color:var(--ink);'}">${escapeHtml(r.name)}</td>
               <td style="text-align:right;">${r.vendas}</td>
               <td class="mono" style="text-align:right;">${fmtPrice(r.valor)}</td>
-              <td style="text-align:right;">${r.semCloser?'<span style="color:var(--ink-soft);">—</span>':`<span class="badge b-fechado">${r.conv}%</span>`}</td>
-            </tr>`).join('') : `<tr class="empty-row"><td colspan="4">Cadastre closers para ver o desempenho.</td></tr>`}
+            </tr>`).join('') : `<tr class="empty-row"><td colspan="3">Cadastre closers para ver o desempenho.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -1111,21 +1088,6 @@ function renderDashboard(){
       </div>
     </div>
 
-    <details class="card funnel-card">
-      <summary>
-        <span>Funil de leads</span>
-        <span class="funnel-sum">${leads.length} leads · ${qtdRealizadas} reuniões realizadas · no-show ${noShowRate}% · conversão ${conversao}%</span>
-      </summary>
-      <div class="section-head" style="margin-top:14px;">
-        <h3 style="font-size:15px;">Leads por etapa</h3>
-        <div class="view-toggle">
-          <button type="button" class="${dashboardChartView==='funnel'?'active':''}" onclick="setDashboardChartView('funnel')">Funil</button>
-          <button type="button" class="${dashboardChartView==='bars'?'active':''}" onclick="setDashboardChartView('bars')">Barras</button>
-          <button type="button" class="${dashboardChartView==='donut'?'active':''}" onclick="setDashboardChartView('donut')">Pizza</button>
-        </div>
-      </div>
-      ${renderStageChart(funnelSteps)}
-    </details>
   `;
 }
 
@@ -1766,7 +1728,6 @@ function openSaleModal(id){
   document.getElementById('modal').classList.add('wide');
   document.getElementById('modal').innerHTML = `
     <h3>${editing?'Editar venda':'Nova venda'}</h3>
-    <div class="field"><label class="field-label">Buscar lead (preenche nome e curso)</label><select id="f-lead" onchange="fillFromLead(this.value)"><option value="">Digitar nome manualmente...</option>${state.leads.map(l=>`<option value="${l.id}" ${s.leadId===l.id?'selected':''}>${escapeHtml(l.name)} — ${(l.courseIds||[]).map(courseName).join(', ')||'sem curso'}</option>`).join('')}</select></div>
     <div class="field"><label class="field-label">Nome da aluna</label><input id="f-name" value="${escapeHtml(s.studentName)}" placeholder="Nome de quem comprou" onchange="prefillPhonesFromStudent()"></div>
     ${phonesFieldHtml(studentPhones(state.students.find(st=>st.name.trim().toLowerCase()===(s.studentName||'').trim().toLowerCase())))}
     <div class="grid2" style="margin-bottom:0;gap:10px;grid-template-columns:1fr 1fr;">
@@ -2121,7 +2082,8 @@ async function persistSale(){
   const studentName = document.getElementById('f-name').value.trim();
   const value = moneyValue('f-value');
   if(!studentName){ alert('Informe o nome da aluna.'); return false; }
-  const leadId = document.getElementById('f-lead').value;
+  const leadEl = document.getElementById('f-lead');
+  const leadId = leadEl ? leadEl.value : (editing ? (editing.leadId||'') : '');
   const closerId = document.getElementById('f-closer').value;
   const closer2Id = closerId ? (document.getElementById('f-closer2').value || '') : '';
   if(closer2Id && closer2Id===closerId){ alert('O closer 2 precisa ser diferente do closer 1.'); return false; }
